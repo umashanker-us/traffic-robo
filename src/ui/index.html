@@ -342,6 +342,66 @@
         ::-webkit-scrollbar-track { background: var(--bg-dark); }
         ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
         ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+        /* ===== SESSION REPLAY PANEL ===== */
+        .replay-panel { display: grid; grid-template-columns: 280px 1fr; gap: 14px; height: 420px; }
+        @media (max-width: 900px) { .replay-panel { grid-template-columns: 1fr; height: auto; } }
+
+        .replay-panel .card { margin-bottom: 0; display: flex; flex-direction: column; overflow: hidden; }
+
+        .replay-list { flex: 1; overflow-y: auto; }
+        .replay-item {
+            display: flex; align-items: center; gap: 8px;
+            padding: 8px 10px; border-bottom: 1px solid var(--border);
+            cursor: pointer; transition: background 0.15s; font-size: 12px;
+        }
+        .replay-item:hover { background: var(--bg-input); }
+        .replay-item.selected { background: rgba(79, 70, 229, 0.15); border-left: 3px solid var(--primary); }
+        .replay-item .ri-id { font-weight: bold; color: var(--primary); min-width: 32px; }
+        .replay-item .ri-url { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); }
+        .replay-item .ri-meta { display: flex; gap: 6px; align-items: center; font-size: 10px; color: var(--text-muted); flex-shrink: 0; }
+
+        .replay-toolbar {
+            display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+            border-bottom: 1px solid var(--border); font-size: 12px; flex-shrink: 0;
+        }
+        .replay-toolbar .replay-count { color: var(--text-muted); }
+        .replay-toolbar button {
+            background: var(--bg-input); color: var(--text-muted); border: 1px solid var(--border);
+            border-radius: 4px; padding: 2px 8px; cursor: pointer; font-size: 10px;
+        }
+        .replay-toolbar button:hover { color: var(--text); background: var(--border); }
+
+        .replay-empty { display: flex; align-items: center; justify-content: center; height: 100%; color: var(--text-muted); font-size: 13px; }
+
+        /* Timeline */
+        .timeline { flex: 1; overflow-y: auto; padding: 10px; }
+        .timeline-event {
+            display: flex; gap: 10px; padding: 6px 0;
+            border-bottom: 1px solid rgba(74, 74, 94, 0.3); font-size: 12px;
+        }
+        .timeline-event:last-child { border-bottom: none; }
+        .te-time { min-width: 52px; color: var(--text-muted); font-family: monospace; font-size: 11px; flex-shrink: 0; }
+        .te-icon { min-width: 20px; text-align: center; flex-shrink: 0; }
+        .te-body { flex: 1; }
+        .te-type { font-weight: 600; margin-right: 6px; }
+        .te-detail { color: var(--text-muted); font-size: 11px; word-break: break-all; }
+
+        .te-nav .te-type { color: #60a5fa; }
+        .te-ga4 .te-type { color: #a78bfa; }
+        .te-success .te-type { color: var(--success); }
+        .te-error .te-type { color: var(--danger); }
+        .te-bounce .te-type { color: var(--warning); }
+        .te-request .te-type { color: #a78bfa; }
+        .te-info .te-type { color: var(--text-muted); }
+
+        .replay-detail-header {
+            display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px;
+            padding: 8px 10px; border-bottom: 1px solid var(--border); flex-shrink: 0;
+        }
+        .rdh-stat { text-align: center; padding: 4px; background: var(--bg-input); border-radius: 6px; }
+        .rdh-stat .rdh-val { font-size: 16px; font-weight: bold; color: var(--primary); }
+        .rdh-stat .rdh-lbl { font-size: 9px; color: var(--text-muted); text-transform: uppercase; }
     </style>
 </head>
 <body>
@@ -811,6 +871,44 @@ gate.decodo.com:7000:user-country-in-city-delhi:password"
                 <!-- Proxy rotation log (last 10) -->
                 <div class="log-output" id="proxyStatsLog" style="font-size:11px;max-height:150px;">
                     <div class="log-entry log-info" style="opacity:0.5;">[Proxy] Waiting for proxied requests...</div>
+                </div>
+            </div>
+
+            <!-- Session Replay Panel -->
+            <div class="card" style="margin-top:14px;">
+                <div class="card-title" style="display:flex;justify-content:space-between;align-items:center;">
+                    Session Replay
+                    <span style="display:flex;gap:8px;align-items:center;">
+                        <span id="replayStatus" style="font-size:11px;color:var(--text-muted);">0 replays</span>
+                        <label style="font-size:10px;display:flex;align-items:center;gap:4px;margin:0;text-transform:none;">
+                            <input type="checkbox" id="replayAutoRefresh" checked style="width:13px;height:13px;"> Auto
+                        </label>
+                        <button onclick="clearReplays()" style="background:var(--bg-input);color:var(--text-muted);border:1px solid var(--border);border-radius:4px;padding:2px 8px;cursor:pointer;font-size:10px;">Clear</button>
+                    </span>
+                </div>
+                <div class="replay-panel">
+                    <!-- Left: Visit list -->
+                    <div class="card" style="background:var(--bg-dark);">
+                        <div class="replay-toolbar">
+                            <span class="replay-count" id="replayListCount">0 visits</span>
+                            <button onclick="refreshReplayList()" style="margin-left:auto;">Refresh</button>
+                        </div>
+                        <div class="replay-list" id="replayList">
+                            <div class="replay-empty">No visits recorded yet</div>
+                        </div>
+                    </div>
+                    <!-- Right: Timeline detail -->
+                    <div class="card" style="background:var(--bg-dark);">
+                        <div class="replay-detail-header" id="replayDetailHeader" style="display:none;">
+                            <div class="rdh-stat"><div class="rdh-val" id="rdPages">-</div><div class="rdh-lbl">Pages</div></div>
+                            <div class="rdh-stat"><div class="rdh-val" id="rdDuration">-</div><div class="rdh-lbl">Duration</div></div>
+                            <div class="rdh-stat"><div class="rdh-val" id="rdGA4">-</div><div class="rdh-lbl">GA4 Events</div></div>
+                            <div class="rdh-stat"><div class="rdh-val" id="rdProxied">-</div><div class="rdh-lbl">Proxied</div></div>
+                        </div>
+                        <div class="timeline" id="replayTimeline">
+                            <div class="replay-empty">Select a visit to view timeline</div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -1384,6 +1482,150 @@ gate.decodo.com:7000:user-country-in-city-delhi:password"
                     // Show panel when proxy data arrives
                     document.getElementById('proxyStatsPanel').style.display = 'block';
                     updateProxyStatsUI(data);
+                }
+            });
+        }
+
+        // ===== Session Replay UI =====
+        let replaySelectedId = null;
+
+        async function refreshReplayList() {
+            const list = await api.getReplayList();
+            const container = document.getElementById('replayList');
+            const countEl = document.getElementById('replayListCount');
+            const statusEl = document.getElementById('replayStatus');
+
+            statusEl.textContent = `${list.length} replays`;
+            countEl.textContent = `${list.length} visits`;
+
+            if (list.length === 0) {
+                container.innerHTML = '<div class="replay-empty">No visits recorded yet</div>';
+                return;
+            }
+
+            container.innerHTML = '';
+            list.forEach(item => {
+                const div = document.createElement('div');
+                div.className = 'replay-item' + (item.threadId === replaySelectedId ? ' selected' : '');
+                div.onclick = () => selectReplay(item.threadId);
+
+                const statusIcon = item.errors > 0 ? '<span style="color:var(--danger)">X</span>'
+                    : item.isBounce ? '<span style="color:var(--warning)">B</span>'
+                    : '<span style="color:var(--success)">OK</span>';
+
+                div.innerHTML = `
+                    <span class="ri-id">#${item.threadId}</span>
+                    <span class="ri-url">${item.duration} | ${item.pages}pg</span>
+                    <span class="ri-meta">
+                        <span>${item.ga4Events} evt</span>
+                        ${statusIcon}
+                    </span>`;
+                container.appendChild(div);
+            });
+        }
+
+        async function selectReplay(threadId) {
+            replaySelectedId = threadId;
+            // Highlight selected
+            document.querySelectorAll('.replay-item').forEach(el => el.classList.remove('selected'));
+            document.querySelectorAll('.replay-item').forEach(el => {
+                if (el.querySelector('.ri-id').textContent === `#${threadId}`) el.classList.add('selected');
+            });
+
+            const replay = await api.getSessionReplay(threadId);
+            if (!replay) return;
+
+            // Update header stats
+            const header = document.getElementById('replayDetailHeader');
+            header.style.display = 'grid';
+            document.getElementById('rdPages').textContent = replay.stats.pagesVisited;
+            document.getElementById('rdDuration').textContent = replay.durationSec + 's';
+            document.getElementById('rdGA4').textContent = replay.stats.ga4EventsFired;
+            document.getElementById('rdProxied').textContent = replay.stats.proxyRequestsRouted;
+
+            // Render timeline
+            const timeline = document.getElementById('replayTimeline');
+            if (!replay.timeline || replay.timeline.length === 0) {
+                timeline.innerHTML = '<div class="replay-empty">No events recorded</div>';
+                return;
+            }
+
+            timeline.innerHTML = '';
+            replay.timeline.forEach(evt => {
+                const div = document.createElement('div');
+                const time = `+${(evt.elapsed / 1000).toFixed(1)}s`;
+                let icon = '', cls = 'te-info', label = evt.type, detail = '';
+
+                switch (evt.type) {
+                    case 'visit_start':
+                        icon = '&#9654;'; cls = 'te-success'; label = 'Visit Start';
+                        detail = `${evt.url || ''} | ${evt.pages || 0} pages, ${evt.duration || 0}s${evt.isBounce ? ' (BOUNCE)' : ''}`;
+                        break;
+                    case 'navigation':
+                        icon = '&#128196;'; cls = 'te-nav'; label = `Page ${evt.pageNumber || ''}`;
+                        detail = `${evt.title || ''} - ${evt.url || ''} (${evt.loadTimeMs || 0}ms)`;
+                        break;
+                    case 'ga4_detection':
+                        icon = evt.detected ? '&#10003;' : '&#10007;'; cls = evt.detected ? 'te-success' : 'te-error';
+                        label = 'GA4 Detection';
+                        detail = `gtag=${evt.hasGtag} dataLayer=${evt.hasDataLayer} GTM=${evt.hasGTM} (${evt.waitTimeMs || 0}ms)`;
+                        break;
+                    case 'ga4_event':
+                        icon = '&#128202;'; cls = 'te-ga4'; label = evt.eventType || 'ga4';
+                        detail = `${evt.url || ''} ${evt.proxied ? '(proxied)' : '(direct)'} [${evt.status || 200}]`;
+                        break;
+                    case 'request':
+                        icon = evt.proxied ? '&#128272;' : '&#8594;'; cls = 'te-request';
+                        label = evt.proxied ? 'Proxied' : 'GA Request';
+                        detail = evt.url || '';
+                        break;
+                    case 'bounce':
+                        icon = '&#128308;'; cls = 'te-bounce'; label = 'BOUNCE';
+                        detail = `Left after ${evt.timeOnPageMs || 0}ms`;
+                        break;
+                    case 'error':
+                        icon = '&#10060;'; cls = 'te-error'; label = `Error [${evt.context || ''}]`;
+                        detail = evt.message || '';
+                        break;
+                    case 'previous_url':
+                        icon = '&#128100;'; cls = 'te-nav'; label = `Previous URL (${evt.source || ''})`;
+                        detail = evt.url || '';
+                        break;
+                    case 'visit_end':
+                        icon = '&#9632;'; cls = 'te-success'; label = 'Visit End';
+                        detail = `${evt.pagesVisited || 0} pages, ${evt.ga4EventsFired || 0} GA4 events, ${Math.round((evt.totalDurationMs || 0) / 1000)}s total`;
+                        break;
+                    case 'proxy_stats':
+                        icon = '&#128272;'; cls = 'te-request'; label = 'Proxy Stats';
+                        detail = `Total: ${evt.total || 0} | Proxied: ${evt.proxied || 0} | Direct: ${evt.direct || 0}`;
+                        break;
+                    default:
+                        icon = '&#8226;'; label = evt.type;
+                        detail = JSON.stringify(evt).substring(0, 120);
+                }
+
+                div.className = `timeline-event ${cls}`;
+                div.innerHTML = `<span class="te-time">${time}</span><span class="te-icon">${icon}</span><span class="te-body"><span class="te-type">${label}</span><span class="te-detail">${detail}</span></span>`;
+                timeline.appendChild(div);
+            });
+            timeline.scrollTop = 0;
+        }
+
+        async function clearReplays() {
+            await api.clearReplays();
+            replaySelectedId = null;
+            document.getElementById('replayList').innerHTML = '<div class="replay-empty">No visits recorded yet</div>';
+            document.getElementById('replayTimeline').innerHTML = '<div class="replay-empty">Select a visit to view timeline</div>';
+            document.getElementById('replayDetailHeader').style.display = 'none';
+            document.getElementById('replayListCount').textContent = '0 visits';
+            document.getElementById('replayStatus').textContent = '0 replays';
+        }
+
+        // Auto-refresh on new replay
+        if (api.onReplayUpdated) {
+            api.onReplayUpdated((threadId) => {
+                if (document.getElementById('replayAutoRefresh').checked) {
+                    refreshReplayList();
                 }
             });
         }

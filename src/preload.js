@@ -27,9 +27,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // ===== Extension =====
     browseExtension: () => ipcRenderer.invoke('browse-extension'),
 
-    // ===== Session Replay (NEW - Medium Priority) =====
+    // ===== Session Replay =====
     getSessionReplay: (sessionId) => ipcRenderer.invoke('get-session-replay', sessionId),
     getReplayList: () => ipcRenderer.invoke('get-replay-list'),
+    clearReplays: () => ipcRenderer.invoke('clear-replays'),
 
     // ===== Event Listeners =====
     onVisitStarted: (callback) => {
@@ -52,10 +53,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.on('proxy-stats-update', subscription);
         return () => ipcRenderer.removeListener('proxy-stats-update', subscription);
     },
+    onReplayUpdated: (callback) => {
+        const subscription = (_event, threadId) => callback(threadId);
+        ipcRenderer.on('replay-updated', subscription);
+        return () => ipcRenderer.removeListener('replay-updated', subscription);
+    },
 
     // ===== Cleanup =====
     removeAllListeners: (channel) => {
-        const validChannels = ['visit-started', 'visit-completed', 'session-event', 'proxy-stats-update'];
+        const validChannels = ['visit-started', 'visit-completed', 'session-event', 'proxy-stats-update', 'replay-updated'];
         if (validChannels.includes(channel)) {
             ipcRenderer.removeAllListeners(channel);
         }

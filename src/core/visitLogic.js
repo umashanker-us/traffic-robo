@@ -14,6 +14,7 @@ const { generateVisitsArray, calculateMetrics, shuffleArray } = require('../help
 const { getUserAgentList, getMatchingScreenSize, getMixedScreenSizes } = require('../helpers/userAgents');
 const AutomaticVisitor = require('./automaticVisitor');
 const ManualVisitor = require('./manualVisitor');
+const { SessionReplayStore } = require('../helpers/sessionReplay');
 
 const logger = getLogger();
 
@@ -26,6 +27,7 @@ class VisitLogic {
         this.startedVisits = 0;
         this.listener = null;
         this.abortController = null;
+        this.replayStore = new SessionReplayStore(100);
     }
 
     /**
@@ -321,8 +323,10 @@ class VisitLogic {
 
                         try {
                             await visitor.execute();
+                            this._collectReplay(visitor);
                             this._notifyVisitCompleted();
                         } catch (error) {
+                            this._collectReplay(visitor);
                             if (this.isRunning) {
                                 logger.error(`Visit ${visitIndex} failed: ${error.message}`);
                             }
@@ -410,8 +414,10 @@ class VisitLogic {
 
                         try {
                             await visitor.execute();
+                            this._collectReplay(visitor);
                             this._notifyVisitCompleted();
                         } catch (error) {
+                            this._collectReplay(visitor);
                             if (this.isRunning) {
                                 logger.error(`Visit ${visitIndex} failed: ${error.message}`);
                             }
@@ -551,6 +557,29 @@ class VisitLogic {
     _notifyGA4Event(data) {
         if (this.listener && this.listener.ga4Event) {
             this.listener.ga4Event(data);
+        }
+    }
+
+    /**
+     * Collect replay from completed visitor and store it
+     */
+    _collectReplay(visitor) {
+        try {
+            if (visitor && visitor.replay) {
+                this.replayStore.addReplay(visitor.replay);
+                this._notifyReplayUpdate(visitor.replay.threadId);
+            }
+        } catch (e) {
+            logger.debug(`Failed to collect replay: ${e.message}`);
+        }
+    }
+
+    /**
+     * Notify listener about new replay available
+     */
+    _notifyReplayUpdate(threadId) {
+        if (this.listener && this.listener.replayUpdate) {
+            this.listener.replayUpdate(threadId);
         }
     }
 
