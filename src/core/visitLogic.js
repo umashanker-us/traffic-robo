@@ -312,7 +312,8 @@ class VisitLogic {
                             blockFonts,
                             blockStyles,
                             blockScripts,
-                            onProxyStats: (data) => this._notifyProxyStats(data)
+                            onProxyStats: (data) => this._notifyProxyStats(data),
+                            onGA4Event: (data) => this._notifyGA4Event(data)
                         });
 
                         // Track active visitor
@@ -541,6 +542,15 @@ class VisitLogic {
     _notifyProxyStats(data) {
         if (this.listener && this.listener.proxyStatsUpdate) {
             this.listener.proxyStatsUpdate(data);
+        }
+    }
+
+    /**
+     * Notify listener about GA4 event detection
+     */
+    _notifyGA4Event(data) {
+        if (this.listener && this.listener.ga4Event) {
+            this.listener.ga4Event(data);
         }
     }
 
