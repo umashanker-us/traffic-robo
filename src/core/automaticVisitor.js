@@ -328,8 +328,8 @@ class AutomaticVisitor {
 
             const loadTimeMs = Date.now() - loadStartTime;
             const loadTime = loadTimeMs / 1000;
-            const pageTitle = await this.page.title().catch(() => 'Unknown');
-            const currentUrl = this.page.url();
+            const pageTitle = this.page ? await this.page.title().catch(() => 'Unknown') : 'Unknown';
+            const currentUrl = this.page ? this.page.url() : this.campaignUrl;
 
             this.replay.logNavigation(currentUrl, loadTimeMs, pageTitle);
 
@@ -432,7 +432,7 @@ class AutomaticVisitor {
 
                 const loadTimeMs = Date.now() - loadStartTime;
                 const loadTime = loadTimeMs / 1000;
-                const pageTitle = await this.page.title().catch(() => '');
+                const pageTitle = this.page ? await this.page.title().catch(() => '') : '';
                 this.replay.logNavigation(linkUrl, loadTimeMs, pageTitle);
                 this.logger.info(`✅ Page ${i + 2} loaded: ${loadTime.toFixed(2)}s - ${linkUrl}`);
 
@@ -466,6 +466,7 @@ class AutomaticVisitor {
      * MATCHES Java link extraction logic
      */
     async _getPageLinks() {
+        if (!this.page) return [];
         try {
             const currentUrl = this.page.url();
             const currentHost = new URL(currentUrl).host;
@@ -538,7 +539,7 @@ class AutomaticVisitor {
         }
         
         try {
-            const currentUrl = new URL(this.page.url());
+            const currentUrl = new URL(this.page ? this.page.url() : this.campaignUrl);
             if (href.startsWith('/')) {
                 return `${currentUrl.protocol}//${currentUrl.host}${href}`;
             } else {
@@ -578,9 +579,10 @@ class AutomaticVisitor {
      * We must wait for ALL of this before navigating away!
      */
     async _waitForGA4() {
+        if (!this.page) return;
         const startTime = Date.now();
         this.logger.info(`⏳ Waiting for page + GA4 to fully load...`);
-        
+
         // STEP 1: Wait for DOM to be complete
         try {
             await this.page.waitForFunction(() => document.readyState === 'complete', { timeout: 15000 });
