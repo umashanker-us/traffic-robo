@@ -94,6 +94,9 @@ ipcMain.handle('start-traffic', async (event, config) => {
             },
             uniqueVisit: (count) => {
                 mainWindow.webContents.send('visit-completed', count);
+            },
+            proxyStatsUpdate: (data) => {
+                mainWindow.webContents.send('proxy-stats-update', data);
             }
         });
 
