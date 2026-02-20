@@ -97,6 +97,9 @@ ipcMain.handle('start-traffic', async (event, config) => {
             },
             proxyStatsUpdate: (data) => {
                 mainWindow.webContents.send('proxy-stats-update', data);
+            },
+            ga4Event: (data) => {
+                mainWindow.webContents.send('session-event', data);
             }
         });
 

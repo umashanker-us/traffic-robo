@@ -1038,6 +1038,9 @@ gate.decodo.com:7000:user-country-in-city-delhi:password"
             updateUI(true);
             addLog('info', `Starting traffic simulation with ${totalVisits} visits...`);
 
+            // Clear GA4 event monitor on new simulation
+            clearGA4Events();
+
             // Proxy stats panel: show if proxy enabled, hide if not, clear previous stats
             if (config.proxyEnabled && config.proxyUrl) {
                 document.getElementById('proxyStatsPanel').style.display = 'block';
@@ -1292,9 +1295,9 @@ gate.decodo.com:7000:user-country-in-city-delhi:password"
             const log = document.getElementById('ga4EventLog');
             const entry = document.createElement('div');
             entry.className = 'log-entry log-info';
-            const icon = proxied ? '🔄' : '📊';
-            const shortUrl = url.length > 60 ? url.substring(0, 60) + '...' : url;
-            entry.innerHTML = `<span style="color:var(--text-muted)">[${new Date().toLocaleTimeString()}]</span> ${icon} <strong style="color:var(--primary)">${eventType}</strong> ${shortUrl}`;
+            const proxyTag = proxied ? '<span style="color:var(--success)">proxied ✅</span>' : '<span style="color:var(--text-muted)">direct</span>';
+            const shortUrl = url.length > 50 ? url.substring(0, 50) + '...' : url;
+            entry.innerHTML = `<span style="color:var(--text-muted)">[${new Date().toLocaleTimeString()}]</span> <strong style="color:var(--primary)">${eventType}</strong> → ${shortUrl} (${proxyTag})`;
             log.appendChild(entry);
             log.scrollTop = log.scrollHeight;
             while (log.children.length > 50) log.removeChild(log.firstChild);

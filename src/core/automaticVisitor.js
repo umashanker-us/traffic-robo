@@ -75,6 +75,8 @@ class AutomaticVisitor {
 
         // Proxy stats callback — called after each proxied /collect and at visit end
         this.onProxyStats = config.onProxyStats || null;
+        // GA4 event callback — called when /collect requests are detected
+        this.onGA4Event = config.onGA4Event || null;
 
         this.logger = getLogger(this.threadId);
         this.browser = null;
@@ -898,9 +900,8 @@ class AutomaticVisitor {
             });
         }
         
-        if (!this.proxyEnabled && !this.adsBlock && !this.fastMode) {
-            return;
-        }
+        // Always install route handler — needed for GA4 event monitoring
+        // even when proxy/adsBlock/fastMode are all disabled
         
         const self = this;
         
@@ -950,10 +951,12 @@ class AutomaticVisitor {
                         });
                         self.replay.logRequest(url, true, true);
                         self._emitProxyStats(url, true);
+                        self._emitGA4Event(url, true);
                     } catch (e) {
                         self.replay.logError('proxy_collect', e.message);
                         self.logger.debug(`/collect proxy failed, fallback direct: ${e.message}`);
                         self._emitProxyStats(url, false);
+                        self._emitGA4Event(url, false);
                         await route.continue();
                     }
                     return;
@@ -967,9 +970,10 @@ class AutomaticVisitor {
                 return;
             }
 
-            // 3b. No proxy but still track GA /collect requests for replay
+            // 3b. No proxy but still track GA /collect requests for replay + monitor
             if (isGACollectRequest(url)) {
                 self.replay.logRequest(url, true, false);
+                self._emitGA4Event(url, false);
             }
             
             // 4. No proxy — just continue
@@ -1033,6 +1037,54 @@ class AutomaticVisitor {
             });
         } catch (e) {
             this.logger.debug(`Proxy stats emit error: ${e.message}`);
+        }
+    }
+
+    /**
+     * Parse GA4 /collect URL to extract event info
+     * GA4 /collect params: en=event_name, tid=G-XXXXX, dl=document_location, dt=document_title
+     * @param {string} url - The /collect request URL
+     * @returns {Object} Parsed event info
+     */
+    _parseGA4CollectUrl(url) {
+        try {
+            const u = new URL(url);
+            const params = u.searchParams;
+            // POST body events use 'en', legacy uses 't' (pageview/event)
+            const eventName = params.get('en') || params.get('t') || 'collect';
+            const tid = params.get('tid') || '';
+            const dl = params.get('dl') || '';
+            // Extract hostname from document location for display
+            let hostname = '';
+            if (dl) {
+                try { hostname = new URL(dl).hostname; } catch {}
+            }
+            return { eventName, tid, dl, hostname };
+        } catch {
+            return { eventName: 'collect', tid: '', dl: '', hostname: '' };
+        }
+    }
+
+    /**
+     * Emit GA4 event to UI via callback
+     * @param {string} url - The /collect request URL
+     * @param {boolean} proxied - Whether the request was proxied
+     */
+    _emitGA4Event(url, proxied) {
+        if (!this.onGA4Event) return;
+        try {
+            const parsed = this._parseGA4CollectUrl(url);
+            this.onGA4Event({
+                type: 'ga4_event',
+                eventType: parsed.eventName,
+                url: parsed.hostname || url,
+                tid: parsed.tid,
+                dl: parsed.dl,
+                proxied: proxied,
+                threadId: this.threadId
+            });
+        } catch (e) {
+            this.logger.debug(`GA4 event emit error: ${e.message}`);
         }
     }
 
