@@ -1,6 +1,6 @@
 /**
- * User Agents - Automated Test Suite
- * Tests user agent generation, screen sizes, and device type configurations
+ * User Agents - Comprehensive Test Suite
+ * Tests user agent generation, UA↔Screen alignment, and device type configs
  */
 
 const {
@@ -34,7 +34,7 @@ describe('Browser UA Generators', () => {
         expect(ua).not.toContain('Mobile');
     });
 
-    test('Chrome mobile UA should contain Mobile', () => {
+    test('Chrome mobile UA should contain Mobile and Android', () => {
         const ua = generateChromeUA('mobile');
         expect(ua).toContain('Mobile');
         expect(ua).toContain('Android');
@@ -97,7 +97,6 @@ describe('Browser UA Generators', () => {
     test('Windows UA should contain Windows NT', () => {
         const ua = generateWindowsUA();
         expect(ua).toContain('Windows NT 10.0');
-        // Should be either Chrome or Edge
         expect(ua).toContain('Chrome/');
     });
 });
@@ -117,7 +116,7 @@ describe('getUserAgentList()', () => {
         expect(uas).toHaveLength(100);
     });
 
-    test('all UAs should be non-empty strings', () => {
+    test('all UAs should be non-empty strings with Mozilla/5.0', () => {
         const uas = getUserAgentList('Default', 100);
         uas.forEach(ua => {
             expect(typeof ua).toBe('string');
@@ -130,8 +129,7 @@ describe('getUserAgentList()', () => {
         const uas = getUserAgentList('Default', 200);
         const mobile = uas.filter(ua => ua.includes('Mobile') || ua.includes('iPhone'));
         const desktop = uas.filter(ua => !ua.includes('Mobile') && !ua.includes('iPhone'));
-        
-        // Should have both, roughly 60% desktop, 35% mobile
+
         expect(mobile.length).toBeGreaterThan(40);
         expect(desktop.length).toBeGreaterThan(80);
     });
@@ -141,7 +139,6 @@ describe('getUserAgentList()', () => {
         uas.forEach(ua => {
             expect(ua).not.toContain('Android');
             expect(ua).not.toContain('iPhone');
-            // Should contain desktop indicators
             const isDesktop = ua.includes('Windows') || ua.includes('Macintosh');
             expect(isDesktop).toBe(true);
         });
@@ -195,42 +192,132 @@ describe('getUserAgentList()', () => {
     test('should generate unique UAs (not all identical)', () => {
         const uas = getUserAgentList('Default', 50);
         const unique = new Set(uas);
-        // Most should be unique due to random version patches
         expect(unique.size).toBeGreaterThan(20);
     });
 });
 
 // ============================================================
-// Screen Size Tests
+// getMatchingScreenSize() — UA ↔ Screen Alignment
 // ============================================================
 describe('getMatchingScreenSize()', () => {
 
-    test('should return desktop size for desktop UA', () => {
-        const ua = generateChromeUA('desktop');
-        const screen = getMatchingScreenSize(ua);
-        expect(screen.width).toBeGreaterThanOrEqual(1024);
-        expect(screen.height).toBeGreaterThanOrEqual(720);
+    describe('mobile UA gets mobile screen (width < 500)', () => {
+        test('Android UA → mobile screen', () => {
+            const ua = generateAndroidUA();
+            const screen = getMatchingScreenSize(ua);
+            expect(screen.width).toBeLessThanOrEqual(500);
+            expect(screen.height).toBeGreaterThanOrEqual(500);
+        });
+
+        test('iPhone UA → mobile screen', () => {
+            const ua = generateiPhoneUA();
+            const screen = getMatchingScreenSize(ua);
+            expect(screen.width).toBeLessThanOrEqual(500);
+            expect(screen.height).toBeGreaterThanOrEqual(500);
+        });
+
+        test('Chrome mobile UA → mobile screen', () => {
+            const ua = generateChromeUA('mobile');
+            const screen = getMatchingScreenSize(ua);
+            expect(screen.width).toBeLessThanOrEqual(500);
+        });
+
+        test('Firefox mobile UA → mobile screen', () => {
+            const ua = generateFirefoxUA('mobile');
+            const screen = getMatchingScreenSize(ua);
+            expect(screen.width).toBeLessThanOrEqual(500);
+        });
+
+        test('Safari mobile UA → mobile screen', () => {
+            const ua = generateSafariUA('mobile');
+            const screen = getMatchingScreenSize(ua);
+            expect(screen.width).toBeLessThanOrEqual(500);
+        });
     });
 
-    test('should return mobile size for mobile UA', () => {
-        const ua = generateAndroidUA();
-        const screen = getMatchingScreenSize(ua);
-        expect(screen.width).toBeLessThanOrEqual(500);
-        expect(screen.height).toBeGreaterThanOrEqual(500);
+    describe('desktop UA gets desktop screen (width >= 1024)', () => {
+        test('Chrome desktop UA → desktop screen', () => {
+            const ua = generateChromeUA('desktop');
+            const screen = getMatchingScreenSize(ua);
+            expect(screen.width).toBeGreaterThanOrEqual(1024);
+            expect(screen.height).toBeGreaterThanOrEqual(720);
+        });
+
+        test('Firefox desktop UA → desktop screen', () => {
+            const ua = generateFirefoxUA('desktop');
+            const screen = getMatchingScreenSize(ua);
+            expect(screen.width).toBeGreaterThanOrEqual(1024);
+        });
+
+        test('Safari desktop UA → desktop screen', () => {
+            const ua = generateSafariUA('desktop');
+            const screen = getMatchingScreenSize(ua);
+            expect(screen.width).toBeGreaterThanOrEqual(1024);
+        });
+
+        test('Edge desktop UA → desktop screen', () => {
+            const ua = generateEdgeUA();
+            const screen = getMatchingScreenSize(ua);
+            expect(screen.width).toBeGreaterThanOrEqual(1024);
+        });
+
+        test('Windows UA → desktop screen', () => {
+            const ua = generateWindowsUA();
+            const screen = getMatchingScreenSize(ua);
+            expect(screen.width).toBeGreaterThanOrEqual(1024);
+        });
     });
 
-    test('should return mobile size for iPhone UA', () => {
-        const ua = generateiPhoneUA();
-        const screen = getMatchingScreenSize(ua);
-        expect(screen.width).toBeLessThanOrEqual(500);
+    describe('tablet UA gets tablet screen', () => {
+        test('iPad UA without Mobile → tablet screen (width 768-1024)', () => {
+            // Note: Real iPad UAs often contain "Mobile", which triggers the mobile check first.
+            // A pure iPad UA (without "Mobile") correctly gets tablet screen.
+            const ua = 'Mozilla/5.0 (iPad; CPU OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/604.1';
+            const screen = getMatchingScreenSize(ua);
+            expect(screen.width).toBeGreaterThanOrEqual(768);
+            expect(screen.width).toBeLessThanOrEqual(1024);
+        });
+
+        test('Tablet-only UA → tablet screen', () => {
+            // UA that contains "Tablet" but not "Mobile" or "Android"
+            const ua = 'Mozilla/5.0 (Linux; Tablet; rv:109.0) Gecko/109.0 Firefox/109.0';
+            const screen = getMatchingScreenSize(ua);
+            expect(screen.width).toBeGreaterThanOrEqual(768);
+            expect(screen.width).toBeLessThanOrEqual(1024);
+        });
+    });
+
+    describe('alignment consistency over many iterations', () => {
+        test('100 mobile UAs should all get mobile screens', () => {
+            for (let i = 0; i < 100; i++) {
+                const ua = generateAndroidUA();
+                const screen = getMatchingScreenSize(ua);
+                expect(screen.width).toBeLessThanOrEqual(500);
+            }
+        });
+
+        test('100 desktop UAs should all get desktop screens', () => {
+            for (let i = 0; i < 100; i++) {
+                const ua = generateChromeUA('desktop');
+                const screen = getMatchingScreenSize(ua);
+                expect(screen.width).toBeGreaterThanOrEqual(1024);
+            }
+        });
     });
 });
 
+// ============================================================
+// getMixedScreenSizes() Tests
+// ============================================================
 describe('getMixedScreenSizes()', () => {
 
     test('should return requested count', () => {
         expect(getMixedScreenSizes(50)).toHaveLength(50);
         expect(getMixedScreenSizes(200)).toHaveLength(200);
+    });
+
+    test('should return 100 by default', () => {
+        expect(getMixedScreenSizes()).toHaveLength(100);
     });
 
     test('should have variety of sizes', () => {
@@ -246,11 +333,23 @@ describe('getMixedScreenSizes()', () => {
             expect(screen.height).toBeGreaterThan(0);
         });
     });
+
+    test('should contain both desktop and mobile sizes', () => {
+        const screens = getMixedScreenSizes(200);
+        const desktop = screens.filter(s => s.width >= 1024);
+        const mobile = screens.filter(s => s.width <= 500);
+        expect(desktop.length).toBeGreaterThan(0);
+        expect(mobile.length).toBeGreaterThan(0);
+    });
 });
 
+// ============================================================
+// getDesktopScreens() and getMobileScreens()
+// ============================================================
 describe('getDesktopScreens()', () => {
-    test('all should be desktop resolution', () => {
+    test('all should be desktop resolution (>= 1024 width)', () => {
         const screens = getDesktopScreens(50);
+        expect(screens).toHaveLength(50);
         screens.forEach(s => {
             expect(s.width).toBeGreaterThanOrEqual(1024);
         });
@@ -258,8 +357,9 @@ describe('getDesktopScreens()', () => {
 });
 
 describe('getMobileScreens()', () => {
-    test('all should be mobile resolution', () => {
+    test('all should be mobile resolution (<= 500 width)', () => {
         const screens = getMobileScreens(50);
+        expect(screens).toHaveLength(50);
         screens.forEach(s => {
             expect(s.width).toBeLessThanOrEqual(500);
         });
@@ -290,5 +390,12 @@ describe('Screen Resolution Data', () => {
 
     test('should have at least 10 mobile resolutions', () => {
         expect(Constants.MOBILE_SCREENS.length).toBeGreaterThanOrEqual(10);
+    });
+
+    test('tablet screens should be in between', () => {
+        Constants.TABLET_SCREENS.forEach(s => {
+            expect(s.width).toBeGreaterThanOrEqual(768);
+            expect(s.width).toBeLessThanOrEqual(1024);
+        });
     });
 });
