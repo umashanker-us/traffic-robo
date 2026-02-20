@@ -147,7 +147,22 @@ ipcMain.handle('start-traffic', async (event, config) => {
             blockMedia: config.blockMedia || false,
             blockFonts: config.blockFonts || false,
             blockStyles: config.blockStyles || false,
-            blockScripts: config.blockScripts || false
+            blockScripts: config.blockScripts || false,
+            // Traffic Source settings
+            trafficSourceType: config.trafficSourceType || '',
+            searchEngine: config.searchEngine || 'Google',
+            searchKeywords: config.searchKeywords || '',
+            referralUrls: config.referralUrls || '',
+            socialPlatforms: config.socialPlatforms || [],
+            utmSource: config.utmSource || '',
+            utmMedium: config.utmMedium || '',
+            utmCampaign: config.utmCampaign || '',
+            utmTerm: config.utmTerm || '',
+            utmContent: config.utmContent || '',
+            mixedDirect: parseInt(config.mixedDirect) || 25,
+            mixedOrganic: parseInt(config.mixedOrganic) || 35,
+            mixedReferral: parseInt(config.mixedReferral) || 20,
+            mixedSocial: parseInt(config.mixedSocial) || 20
         });
 
         return { success: true };
