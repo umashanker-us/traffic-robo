@@ -1,17 +1,13 @@
 /**
  * Electron Builder Configuration for GA4 Traffic Robo v2.4
- * 
- * LOW PRIORITY: Simplified packaging for distribution
- * 
+ *
  * Build commands:
- *   npm run build:win      → Windows .exe installer
- *   npm run build:mac      → macOS .dmg
- *   npm run build:linux    → Linux .AppImage + .deb
- *   npm run build:all      → All platforms
+ *   npm run build          → Windows .exe installer (bundles Chromium)
+ *   npm run build:dir      → Unpacked build for testing
  *   npm run build:portable → Windows portable (no installer)
- * 
- * Prerequisites:
- *   npm install --save-dev electron-builder
+ *
+ * Chromium is bundled via extraResources so users don't need to install it.
+ * Run `node scripts/bundle-browser.js` first (the build script does this automatically).
  */
 
 module.exports = {
@@ -40,7 +36,17 @@ module.exports = {
             from: "data",
             to: "data",
             filter: ["**/*"]
+        },
+        {
+            from: "playwright-browsers",
+            to: "playwright-browsers",
+            filter: ["**/*"]
         }
+    ],
+
+    asar: true,
+    asarUnpack: [
+        "playwright-browsers/**/*"
     ],
 
     // ===== Windows =====
@@ -60,8 +66,8 @@ module.exports = {
     },
 
     nsis: {
-        oneClick: false,
-        allowToChangeInstallationDirectory: true,
+        oneClick: true,
+        allowToChangeInstallationDirectory: false,
         createDesktopShortcut: true,
         createStartMenuShortcut: true,
         shortcutName: "GA4 Traffic Robo",
@@ -123,11 +129,5 @@ module.exports = {
     //     repo: "ga4-traffic-robo"
     // },
 
-    // ===== Playwright Browser =====
-    // Note: Playwright Chromium is NOT bundled — user must run:
-    //   npx playwright install chromium
-    // after installation. Consider adding a first-run check.
-    afterPack: async function(context) {
-        console.log("✅ Build complete! Remember: Users must run 'npx playwright install chromium' after first install.");
-    }
+    // Chromium is bundled via extraResources — no post-install step needed
 };

@@ -7,16 +7,27 @@
 
 const path = require('path');
 
-// Base paths - will be set dynamically based on app location
-const APP_PATH = process.cwd();
+// Base paths - detect packaged Electron app vs dev mode
+// In packaged mode, process.resourcesPath points to the app's resources directory
+// which contains extraResources (data/, playwright-browsers/) alongside app.asar.
+// In dev mode, fall back to process.cwd() (project root).
+const isPackaged = process.resourcesPath && !process.resourcesPath.includes('node_modules');
+const APP_PATH = isPackaged ? process.resourcesPath : process.cwd();
 const DATA_PATH = path.join(APP_PATH, 'data');
+
+// Writable path for logs/replays/config — resources dir may be read-only in packaged mode
+const WRITABLE_PATH = isPackaged
+    ? path.join(process.env.APPDATA || process.env.HOME || APP_PATH, 'GA4 Traffic Robo')
+    : APP_PATH;
 
 const Constants = {
     // Paths
+    APP_PATH: APP_PATH,
+    DATA_PATH: DATA_PATH,
     BROWSER_PATH: path.join(DATA_PATH, 'browsers'),
     LOCATION_PATH: path.join(DATA_PATH, 'location'),
-    LOGS_PATH: path.join(APP_PATH, 'logs'),
-    CONFIG_PATH: path.join(APP_PATH, 'config'),
+    LOGS_PATH: path.join(WRITABLE_PATH, 'logs'),
+    CONFIG_PATH: path.join(WRITABLE_PATH, 'config'),
     EXTENSIONS_PATH: path.join(APP_PATH, 'src', 'extensions'),
 
     // User Agent Types
