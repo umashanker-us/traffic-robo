@@ -17,13 +17,14 @@
     "test:intl": "jest tests/internationalIP.test.js --verbose",
     "test:replay": "jest tests/sessionReplay.test.js --verbose",
     "test:legacy": "node src/test.js",
-    "build:win": "electron-builder --win --config electron-builder.config.js",
+    "build": "node scripts/bundle-browser.js && electron-builder --win --config electron-builder.config.js",
+    "build:dir": "node scripts/bundle-browser.js && electron-builder --win --dir --config electron-builder.config.js",
     "build:mac": "electron-builder --mac --config electron-builder.config.js",
     "build:linux": "electron-builder --linux --config electron-builder.config.js",
-    "build:all": "electron-builder --win --mac --linux --config electron-builder.config.js",
-    "build:portable": "electron-builder --win portable --config electron-builder.config.js",
-    "install-browsers": "npx playwright install chromium",
-    "postinstall": "echo 'Run: npm run install-browsers to download Playwright browser'"
+    "build:all": "node scripts/bundle-browser.js && electron-builder --win --mac --linux --config electron-builder.config.js",
+    "build:portable": "node scripts/bundle-browser.js && electron-builder --win portable --config electron-builder.config.js",
+    "bundle-browser": "node scripts/bundle-browser.js",
+    "install-browsers": "npx playwright install chromium"
   },
   "author": "Uma Shankar",
   "license": "MIT",
@@ -35,6 +36,7 @@
   },
   "devDependencies": {
     "electron": "^28.0.0",
+    "electron-builder": "^25.1.8",
     "jest": "^30.2.0"
   },
   "engines": {

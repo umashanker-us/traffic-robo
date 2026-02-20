@@ -28,7 +28,7 @@ const { ProxyRouter, isGACollectRequest, isGAScript, createPlaywrightProxy, pars
 const { generateIndianIP } = require('../helpers/indianIP');
 const { SessionReplay } = require('../helpers/sessionReplay');
 
-const REPLAYS_DIR = path.join(process.cwd(), 'data', 'replays');
+const REPLAYS_DIR = path.join(Constants.DATA_PATH, 'replays');
 
 class AutomaticVisitor {
     constructor(config) {
@@ -782,11 +782,37 @@ class AutomaticVisitor {
     }
 
     /**
+     * Get bundled Chromium path when running as a packaged Electron app.
+     * Returns undefined in dev mode so Playwright uses its own installed browser.
+     */
+    _getChromiumPath() {
+        // In packaged Electron apps, process.resourcesPath points to the resources dir
+        const isPackaged = process.resourcesPath && !process.resourcesPath.includes('node_modules');
+        if (!isPackaged) return undefined;
+
+        const candidates = [
+            path.join(process.resourcesPath, 'playwright-browsers', 'chromium', 'chrome-win64', 'chrome.exe'),
+            path.join(process.resourcesPath, 'playwright-browsers', 'chromium', 'chrome-win', 'chrome.exe'),
+        ];
+
+        for (const candidate of candidates) {
+            if (fs.existsSync(candidate)) {
+                this.logger.info(`Using bundled Chromium: ${candidate}`);
+                return candidate;
+            }
+        }
+
+        this.logger.warn('Bundled Chromium not found, falling back to Playwright default');
+        return undefined;
+    }
+
+    /**
      * Launch browser based on play mode
      * FIXED: Added extension support for SimilarWeb
+     * Uses bundled Chromium in packaged mode
      */
     async _launchBrowser() {
-        const isHeadless = this.playMode === Constants.PLAY_MODES.FASTEST || 
+        const isHeadless = this.playMode === Constants.PLAY_MODES.FASTEST ||
                           this.playMode === Constants.PLAY_MODES.FAST;
 
         const launchOptions = {
@@ -800,21 +826,27 @@ class AutomaticVisitor {
                 `--window-size=${this.screenSize.width},${this.screenSize.height}`
             ]
         };
-        
+
+        // Use bundled Chromium in packaged mode
+        const chromiumPath = this._getChromiumPath();
+        if (chromiumPath) {
+            launchOptions.executablePath = chromiumPath;
+        }
+
         // FIXED: Add extension if enabled and path exists
         // Note: Extensions only work in headed mode (non-headless)
         if (this.extensionEnabled && this.extensionPath && !isHeadless) {
             if (fs.existsSync(this.extensionPath)) {
                 launchOptions.args.push(`--disable-extensions-except=${this.extensionPath}`);
                 launchOptions.args.push(`--load-extension=${this.extensionPath}`);
-                this.logger.info(`🧩 Loading extension from: ${this.extensionPath}`);
+                this.logger.info(`Loading extension from: ${this.extensionPath}`);
                 this.extensionLoaded = true;
             } else {
-                this.logger.warn(`❌ Extension path not found: ${this.extensionPath}`);
+                this.logger.warn(`Extension path not found: ${this.extensionPath}`);
                 this.extensionLoaded = false;
             }
         } else if (this.extensionEnabled && isHeadless) {
-            this.logger.warn(`⚠️ Extensions require headed mode (Slow or Slower). Current mode: ${this.playMode}`);
+            this.logger.warn(`Extensions require headed mode (Slow or Slower). Current mode: ${this.playMode}`);
             this.extensionLoaded = false;
         }
 
