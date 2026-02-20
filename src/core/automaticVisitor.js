@@ -884,6 +884,8 @@ class AutomaticVisitor {
             deviceScaleFactor: this.userAgent.includes('Mobile') ? 2 : 1
         };
 
+        this.logger.info(`Viewport: ${this.screenSize.width}x${this.screenSize.height} | UA: ${this.userAgent.substring(0, 50)}... | Mobile: ${this.userAgent.includes('Mobile')}`);
+
         if (this.isReferer && this.referer) {
             contextOptions.extraHTTPHeaders = {
                 'Referer': this.referer
