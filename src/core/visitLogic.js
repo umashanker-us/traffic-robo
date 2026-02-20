@@ -28,6 +28,9 @@ class VisitLogic {
         this.listener = null;
         this.abortController = null;
         this.replayStore = new SessionReplayStore(100);
+        this.campaignResults = [];  // Per-visit results for export
+        this.campaignConfig = null; // Store config for export metadata
+        this.campaignStartTime = null;
     }
 
     /**
@@ -85,6 +88,9 @@ class VisitLogic {
         this.isRunning = true;
         this.completedVisits = 0;
         this.startedVisits = 0;
+        this.campaignResults = [];
+        this.campaignConfig = config;
+        this.campaignStartTime = new Date().toISOString();
         this.abortController = new AbortController();
 
         // Validate inputs
@@ -212,6 +218,7 @@ class VisitLogic {
             logger.info(`✅ Traffic simulation completed!`);
             logger.info(`Total time: ${totalTime.toFixed(2)}s`);
             logger.info(`Visits completed: ${this.completedVisits}`);
+            this._notifySimulationComplete();
 
         } catch (error) {
             if (error.name === 'AbortError') {
@@ -324,9 +331,11 @@ class VisitLogic {
                         try {
                             await visitor.execute();
                             this._collectReplay(visitor);
+                            this._collectResult(visitor);
                             this._notifyVisitCompleted();
                         } catch (error) {
                             this._collectReplay(visitor);
+                            this._collectResult(visitor);
                             if (this.isRunning) {
                                 logger.error(`Visit ${visitIndex} failed: ${error.message}`);
                             }
@@ -415,9 +424,11 @@ class VisitLogic {
                         try {
                             await visitor.execute();
                             this._collectReplay(visitor);
+                            this._collectResult(visitor);
                             this._notifyVisitCompleted();
                         } catch (error) {
                             this._collectReplay(visitor);
+                            this._collectResult(visitor);
                             if (this.isRunning) {
                                 logger.error(`Visit ${visitIndex} failed: ${error.message}`);
                             }
@@ -581,6 +592,50 @@ class VisitLogic {
         if (this.listener && this.listener.replayUpdate) {
             this.listener.replayUpdate(threadId);
         }
+    }
+
+    /**
+     * Collect per-visit result from completed visitor for export
+     */
+    _collectResult(visitor) {
+        try {
+            if (visitor && visitor.replay) {
+                const summary = visitor.replay.getSummary();
+                // Enrich sessionInfo with proxy URL for city extraction
+                if (visitor.proxyUrl && summary.sessionInfo) {
+                    summary.sessionInfo.proxyUrl = visitor.proxyUrl;
+                }
+                this.campaignResults.push(summary);
+            }
+        } catch (e) {
+            logger.debug(`Failed to collect result: ${e.message}`);
+        }
+    }
+
+    /**
+     * Notify listener that simulation is complete (for export prompt)
+     */
+    _notifySimulationComplete() {
+        if (this.listener && this.listener.simulationComplete) {
+            this.listener.simulationComplete({
+                totalResults: this.campaignResults.length,
+                completedVisits: this.completedVisits,
+            });
+        }
+    }
+
+    /**
+     * Get collected campaign results for export
+     */
+    getCampaignResults() {
+        return this.campaignResults;
+    }
+
+    /**
+     * Get campaign config for export metadata
+     */
+    getCampaignConfig() {
+        return this.campaignConfig;
     }
 
     /**

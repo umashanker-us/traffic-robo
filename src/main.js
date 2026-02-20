@@ -11,6 +11,7 @@ const path = require('path');
 const fs = require('fs');
 const VisitLogic = require('./core/visitLogic');
 const { logger } = require('./helpers/logger');
+const { generateCSV, generateJSON, getExportFilename } = require('./helpers/campaignExport');
 
 let mainWindow;
 let visitLogic = null;
@@ -103,6 +104,9 @@ ipcMain.handle('start-traffic', async (event, config) => {
             },
             replayUpdate: (threadId) => {
                 mainWindow.webContents.send('replay-updated', threadId);
+            },
+            simulationComplete: (data) => {
+                mainWindow.webContents.send('simulation-complete', data);
             }
         });
 
@@ -307,4 +311,78 @@ ipcMain.handle('clear-replays', () => {
         visitLogic.replayStore.clear();
     }
     return { success: true };
+});
+
+// ==================== Campaign Export IPC Handlers ====================
+
+/**
+ * Export campaign results as CSV
+ */
+ipcMain.handle('export-campaign-csv', async () => {
+    try {
+        if (!visitLogic || visitLogic.getCampaignResults().length === 0) {
+            return { success: false, error: 'No campaign results to export' };
+        }
+
+        const defaultFilename = getExportFilename('csv');
+        const { filePath } = await dialog.showSaveDialog(mainWindow, {
+            title: 'Export Campaign Results (CSV)',
+            defaultPath: defaultFilename,
+            filters: [
+                { name: 'CSV Files', extensions: ['csv'] }
+            ]
+        });
+
+        if (filePath) {
+            const csv = generateCSV(visitLogic.getCampaignResults());
+            fs.writeFileSync(filePath, csv, 'utf8');
+            logger.info(`Campaign CSV exported to: ${filePath}`);
+            return { success: true, path: filePath, rows: visitLogic.getCampaignResults().length };
+        }
+        return { success: false };
+    } catch (error) {
+        logger.error(`CSV export error: ${error.message}`);
+        return { success: false, error: error.message };
+    }
+});
+
+/**
+ * Export campaign results as JSON
+ */
+ipcMain.handle('export-campaign-json', async () => {
+    try {
+        if (!visitLogic || visitLogic.getCampaignResults().length === 0) {
+            return { success: false, error: 'No campaign results to export' };
+        }
+
+        const defaultFilename = getExportFilename('json');
+        const { filePath } = await dialog.showSaveDialog(mainWindow, {
+            title: 'Export Campaign Report (JSON)',
+            defaultPath: defaultFilename,
+            filters: [
+                { name: 'JSON Files', extensions: ['json'] }
+            ]
+        });
+
+        if (filePath) {
+            const report = generateJSON(visitLogic.getCampaignResults(), visitLogic.getCampaignConfig());
+            fs.writeFileSync(filePath, JSON.stringify(report, null, 2), 'utf8');
+            logger.info(`Campaign JSON exported to: ${filePath}`);
+            return { success: true, path: filePath, rows: visitLogic.getCampaignResults().length };
+        }
+        return { success: false };
+    } catch (error) {
+        logger.error(`JSON export error: ${error.message}`);
+        return { success: false, error: error.message };
+    }
+});
+
+/**
+ * Get campaign results count (for UI button state)
+ */
+ipcMain.handle('get-campaign-results-count', () => {
+    if (visitLogic) {
+        return visitLogic.getCampaignResults().length;
+    }
+    return 0;
 });

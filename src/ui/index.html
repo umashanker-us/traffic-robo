@@ -450,6 +450,8 @@
         <div class="action-btns">
             <button class="btn btn-primary" id="startBtn" onclick="startTraffic()">▶️ START</button>
             <button class="btn btn-danger" id="stopBtn" onclick="stopTraffic()" disabled>⏹️ STOP</button>
+            <button class="btn btn-secondary" id="exportCsvBtn" onclick="exportCSV()" disabled style="font-size:11px;padding:6px 12px;">CSV</button>
+            <button class="btn btn-secondary" id="exportJsonBtn" onclick="exportJSON()" disabled style="font-size:11px;padding:6px 12px;">JSON</button>
         </div>
     </div>
 
@@ -1189,19 +1191,22 @@ gate.decodo.com:7000:user-country-in-city-delhi:password"
         // Update UI state
         function updateUI(running) {
             isRunning = running;
-            
+
             document.getElementById('startBtn').disabled = running;
             document.getElementById('stopBtn').disabled = !running;
-            
+
             const indicator = document.getElementById('statusIndicator');
             const statusText = document.getElementById('statusText');
-            
+
             if (running) {
                 indicator.className = 'status-indicator running';
                 statusText.textContent = 'Running...';
+                enableExportButtons(false);
             } else {
                 indicator.className = 'status-indicator stopped';
                 statusText.textContent = completedVisits > 0 ? `Completed ${completedVisits} visits` : 'Ready to start';
+                // Enable export if we have results
+                if (completedVisits > 0) enableExportButtons(true);
             }
         }
 
@@ -1626,6 +1631,48 @@ gate.decodo.com:7000:user-country-in-city-delhi:password"
             api.onReplayUpdated((threadId) => {
                 if (document.getElementById('replayAutoRefresh').checked) {
                     refreshReplayList();
+                }
+            });
+        }
+
+        // ===== Campaign Export =====
+        function enableExportButtons(enabled) {
+            document.getElementById('exportCsvBtn').disabled = !enabled;
+            document.getElementById('exportJsonBtn').disabled = !enabled;
+        }
+
+        async function exportCSV() {
+            addLog('info', 'Exporting campaign results as CSV...');
+            const result = await api.exportCampaignCSV();
+            if (result.success) {
+                addLog('info', `CSV exported: ${result.rows} visits saved to ${result.path}`);
+            } else if (result.error) {
+                addLog('error', `CSV export failed: ${result.error}`);
+            }
+        }
+
+        async function exportJSON() {
+            addLog('info', 'Exporting campaign report as JSON...');
+            const result = await api.exportCampaignJSON();
+            if (result.success) {
+                addLog('info', `JSON exported: ${result.rows} visits saved to ${result.path}`);
+            } else if (result.error) {
+                addLog('error', `JSON export failed: ${result.error}`);
+            }
+        }
+
+        // Listen for simulation complete to prompt export
+        if (api.onSimulationComplete) {
+            api.onSimulationComplete((data) => {
+                enableExportButtons(true);
+                if (data && data.totalResults > 0) {
+                    addLog('info', `Simulation complete! ${data.totalResults} visit results ready for export.`);
+                    switchTab('monitor');
+                    setTimeout(() => {
+                        if (confirm(`Simulation complete! ${data.totalResults} visits recorded.\n\nExport results now?`)) {
+                            exportCSV();
+                        }
+                    }, 500);
                 }
             });
         }
