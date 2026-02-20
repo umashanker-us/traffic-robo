@@ -100,6 +100,9 @@ ipcMain.handle('start-traffic', async (event, config) => {
             },
             ga4Event: (data) => {
                 mainWindow.webContents.send('session-event', data);
+            },
+            replayUpdate: (threadId) => {
+                mainWindow.webContents.send('replay-updated', threadId);
             }
         });
 
@@ -272,4 +275,36 @@ ipcMain.handle('browse-extension', async () => {
  */
 ipcMain.handle('is-running', () => {
     return visitLogic ? visitLogic.isRunning : false;
+});
+
+// ==================== Session Replay IPC Handlers ====================
+
+/**
+ * Get list of recent replays (compact)
+ */
+ipcMain.handle('get-replay-list', () => {
+    if (visitLogic && visitLogic.replayStore) {
+        return visitLogic.replayStore.getReplayList();
+    }
+    return [];
+});
+
+/**
+ * Get full replay detail by thread/visit ID
+ */
+ipcMain.handle('get-session-replay', (event, threadId) => {
+    if (visitLogic && visitLogic.replayStore) {
+        return visitLogic.replayStore.getReplay(threadId);
+    }
+    return null;
+});
+
+/**
+ * Clear all stored replays
+ */
+ipcMain.handle('clear-replays', () => {
+    if (visitLogic && visitLogic.replayStore) {
+        visitLogic.replayStore.clear();
+    }
+    return { success: true };
 });
