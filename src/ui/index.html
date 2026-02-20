@@ -566,15 +566,24 @@
                     </div>
 
                     <div class="form-group">
-                        <label>Traffic Source</label>
-                        <select id="trafficSourceType" onchange="toggleTrafficSource()">
-                            <option value="Direct">Direct (no referer/UTM)</option>
-                            <option value="Organic Search">Organic Search</option>
-                            <option value="Referral">Referral</option>
-                            <option value="Social">Social</option>
-                            <option value="UTM Campaign">UTM Campaign</option>
-                            <option value="Mixed">Mixed (percentage-based)</option>
-                        </select>
+                        <div class="checkbox-group">
+                            <input type="checkbox" id="trafficSourceEnabled" onchange="toggleTrafficSource()">
+                            <label class="checkbox-label" for="trafficSourceEnabled">Enable Traffic Source</label>
+                        </div>
+                    </div>
+
+                    <div id="trafficSourceSection" style="display:none;">
+                        <div class="form-group">
+                            <label>Traffic Source</label>
+                            <select id="trafficSourceType" onchange="toggleTrafficSource()">
+                                <option value="Direct">Direct (no referrer header)</option>
+                                <option value="Organic Search">Organic Search</option>
+                                <option value="Referral">Referral</option>
+                                <option value="Social">Social</option>
+                                <option value="UTM Campaign">UTM Campaign</option>
+                                <option value="Mixed">Mixed (percentage-based)</option>
+                            </select>
+                        </div>
                     </div>
 
                     <!-- Organic Search options -->
@@ -1226,7 +1235,9 @@ gate.decodo.com:7000:user-country-in-city-delhi:password"
                 blockStyles: document.getElementById('blockStyles').checked,
                 blockScripts: document.getElementById('blockScripts').checked,
                 // Traffic Source settings
-                trafficSourceType: document.getElementById('trafficSourceType').value,
+                trafficSourceEnabled: document.getElementById('trafficSourceEnabled').checked,
+                trafficSourceType: document.getElementById('trafficSourceEnabled').checked
+                    ? document.getElementById('trafficSourceType').value : '',
                 searchEngine: document.getElementById('searchEngine').value,
                 searchKeywords: document.getElementById('searchKeywords').value,
                 referralUrls: document.getElementById('referralUrls').value,
@@ -1250,6 +1261,7 @@ gate.decodo.com:7000:user-country-in-city-delhi:password"
 
             // Backward compat: old config with refererLinks/isReferer → convert to Referral type
             if (!config.trafficSourceType && config.isReferer && config.refererLinks) {
+                document.getElementById('trafficSourceEnabled').checked = true;
                 document.getElementById('trafficSourceType').value = 'Referral';
                 document.getElementById('referralUrls').value = config.refererLinks;
                 toggleTrafficSource();
@@ -1299,10 +1311,15 @@ gate.decodo.com:7000:user-country-in-city-delhi:password"
             if (config.blockStyles !== undefined) document.getElementById('blockStyles').checked = config.blockStyles;
             if (config.blockScripts !== undefined) document.getElementById('blockScripts').checked = config.blockScripts;
             // Traffic Source settings
+            if (config.trafficSourceEnabled !== undefined) {
+                document.getElementById('trafficSourceEnabled').checked = config.trafficSourceEnabled;
+            } else if (config.trafficSourceType) {
+                document.getElementById('trafficSourceEnabled').checked = true;
+            }
             if (config.trafficSourceType) {
                 document.getElementById('trafficSourceType').value = config.trafficSourceType;
-                toggleTrafficSource();
             }
+            toggleTrafficSource();
             if (config.searchEngine) document.getElementById('searchEngine').value = config.searchEngine;
             if (config.searchKeywords) document.getElementById('searchKeywords').value = config.searchKeywords;
             if (config.referralUrls) document.getElementById('referralUrls').value = config.referralUrls;
@@ -1359,13 +1376,17 @@ gate.decodo.com:7000:user-country-in-city-delhi:password"
         
         // Toggle traffic source subsections
         function toggleTrafficSource() {
-            const type = document.getElementById('trafficSourceType').value;
+            const enabled = document.getElementById('trafficSourceEnabled').checked;
+            document.getElementById('trafficSourceSection').style.display = enabled ? 'block' : 'none';
             document.getElementById('tsOrganic').style.display = 'none';
             document.getElementById('tsReferral').style.display = 'none';
             document.getElementById('tsSocial').style.display = 'none';
             document.getElementById('tsUTM').style.display = 'none';
             document.getElementById('tsMixed').style.display = 'none';
 
+            if (!enabled) return;
+
+            const type = document.getElementById('trafficSourceType').value;
             switch (type) {
                 case 'Organic Search':
                     document.getElementById('tsOrganic').style.display = 'block';
@@ -1646,6 +1667,7 @@ gate.decodo.com:7000:user-country-in-city-delhi:password"
             document.getElementById('extensionInfo').classList.add('not-loaded');
             
             // Traffic Source reset
+            document.getElementById('trafficSourceEnabled').checked = false;
             document.getElementById('trafficSourceType').value = 'Direct';
             document.getElementById('searchEngine').value = 'Google';
             document.getElementById('searchKeywords').value = '';
