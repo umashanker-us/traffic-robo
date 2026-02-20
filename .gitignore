@@ -23,6 +23,9 @@ logs/
 *.log
 npm-debug.log*
 
+# Session replay data
+data/replays/
+
 # Coverage
 coverage/
 
