@@ -913,15 +913,8 @@ class AutomaticVisitor {
     }
 
     async _addStealthScripts() {
-        const locale = this.locationData.locale || 'en-IN';
-        const baseLang = locale.split('-')[0]; // 'en' from 'en-IN'
-        
-        // Build language list matching location
-        const languages = [locale]; // e.g. 'en-IN'
-        if (!languages.includes(baseLang)) languages.push(baseLang); // 'en'
-        // Add Hindi for Indian locations
-        if (locale.endsWith('-IN') && !languages.includes('hi')) languages.push('hi');
-        
+        const languages = Constants.getLanguagesForLocation(this.location);
+
         await this.context.addInitScript((langs) => {
             Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
             Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });

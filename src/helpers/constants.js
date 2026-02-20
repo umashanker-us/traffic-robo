@@ -195,4 +195,22 @@ Constants.getLocationCoords = function(locationName) {
     return this.LOCATION_COORDS[locationName] || this.LOCATION_COORDS['India'];
 };
 
+/**
+ * Get browser languages array for a location
+ * Mirrors the logic in AutomaticVisitor._addStealthScripts()
+ * @param {string} locationName - Location name from LOCATIONS
+ * @returns {string[]} Array of language tags, e.g. ['en-IN', 'en', 'hi']
+ */
+Constants.getLanguagesForLocation = function(locationName) {
+    const locationData = this.getLocationCoords(locationName);
+    const locale = (locationData && locationData.locale) || 'en-IN';
+    const baseLang = locale.split('-')[0];
+
+    const languages = [locale];
+    if (!languages.includes(baseLang)) languages.push(baseLang);
+    if (locale.endsWith('-IN') && !languages.includes('hi')) languages.push('hi');
+
+    return languages;
+};
+
 module.exports = Constants;
