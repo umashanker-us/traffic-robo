@@ -26,6 +26,9 @@ const { getLogger } = require('../helpers/logger');
 const Constants = require('../helpers/constants');
 const { ProxyRouter, isGACollectRequest, isGAScript, createPlaywrightProxy, parseProxyString } = require('../helpers/proxyRouter');
 const { generateIndianIP } = require('../helpers/indianIP');
+const { SessionReplay } = require('../helpers/sessionReplay');
+
+const REPLAYS_DIR = path.join(process.cwd(), 'data', 'replays');
 
 class AutomaticVisitor {
     constructor(config) {
@@ -108,7 +111,27 @@ class AutomaticVisitor {
      */
     async execute() {
         const startTime = Date.now();
-        
+
+        // Initialize session replay
+        this.replay = new SessionReplay(this.threadId, { maxEvents: 200 });
+        this.replay.setSessionInfo({
+            userAgent: this.userAgent,
+            screenSize: this.screenSize,
+            location: this.location,
+            playMode: this.playMode,
+            proxyMode: this.proxyEnabled ? 'collect-only' : 'none',
+            ipRotation: this.ipRotation,
+            spoofedIP: this.currentIP,
+            isOldUser: this.isOldUser,
+        });
+        this.replay._addEvent('visit_start', {
+            url: this.campaignUrl,
+            pages: this.visit.getPagePerSession(),
+            duration: this.visit.getAvgSessionDuration(),
+            isBounce: this.visit.isBounce(),
+            proxy: this.proxyEnabled ? `${this.proxyConfig?.host}:${this.proxyConfig?.port}` : null,
+        });
+
         // Log visit details
         this.logger.info(`═══════════════════════════════════════════════════`);
         this.logger.info(`🚀 Starting Visit #${this.threadId}`);
@@ -132,10 +155,10 @@ class AutomaticVisitor {
         try {
             await this._launchBrowser();
             await this._createContext();
-            
+
             // Handle returning users (visit previous URL first to create cookie/session)
             // This makes GA4 see them as "returning" users
-            // 
+            //
             // Cases:
             // 1. Returning % = 0 → isOldUser = false → Skip (all NEW users)
             // 2. Returning % > 0, previousURL set → Use manual previous URL
@@ -148,22 +171,23 @@ class AutomaticVisitor {
             } else if (this.isOldUser && !this.visit.isBounce()) {
                 this.logger.info(`⚠️ Old user but no previous URL configured - will be treated as NEW user by GA4`);
             }
-            
+
             // Visit the campaign URL (first page)
             await this._visitFirstPage();
-            
+
             // CRITICAL: Check if this is a BOUNCE visit
             if (this.visit.isBounce()) {
                 // Bounce visit - NO WAIT, exit immediately
                 this.logger.info(`🔴 BOUNCE VISIT - Exiting immediately (no additional pages, no wait)`);
+                this.replay.logBounce(Date.now() - startTime);
             } else {
                 // Non-bounce visit - wait and visit additional pages
-                
+
                 // Wait for first page (Java: Thread.sleep(1000 * avgSessionDuration / pagePerSession))
                 const waitTimeMs = this.visit.getWaitTimePerPageMs();
                 this.logger.info(`Waiting ${waitTimeMs}ms on first page...`);
                 await this._sleep(waitTimeMs);
-                
+
                 // Visit additional pages if pagePerSession > 1
                 const additionalPages = this.visit.getAdditionalPages();
                 if (additionalPages > 0) {
@@ -173,16 +197,32 @@ class AutomaticVisitor {
 
             const totalTime = (Date.now() - startTime) / 1000;
             this.logger.info(`✅ Visit completed in ${totalTime.toFixed(2)}s`);
-            
+
             // Log proxy stats if enabled
             if (this.proxyRouter) {
                 this.proxyRouter.logStats();
+                this.replay._addEvent('proxy_stats', {
+                    total: this.proxyRouter.stats.totalRequests,
+                    proxied: this.proxyRouter.stats.proxiedRequests,
+                    direct: this.proxyRouter.stats.directRequests,
+                    scriptsLoadedDirect: this.proxyRouter.stats.scriptsLoadedDirect,
+                });
             }
 
+            // Record visit end
+            this.replay._addEvent('visit_end', {
+                totalDurationMs: Date.now() - startTime,
+                pagesVisited: this.replay.stats.pagesVisited,
+                isBounce: this.visit.isBounce(),
+                ga4EventsFired: this.replay.stats.ga4EventsFired,
+            });
+
         } catch (error) {
+            this.replay.logError('execute', error.message);
             this.logger.error(`Visit failed: ${error.message}`);
             throw error;
         } finally {
+            this._saveReplay();
             await this._cleanup();
         }
     }
@@ -223,21 +263,23 @@ class AutomaticVisitor {
         this.logger.info(`👤 RETURNING USER - Visiting previous URL first (${urlSource})`);
         this.logger.info(`   Step 1: ${prevUrl} (creates cookie/session)`);
         this.logger.info(`   Step 2: ${this.campaignUrl} (GA4 sees as returning)`);
-        
+        this.replay.logPreviousURLVisit(prevUrl, urlSource);
+
         try {
             await this.page.goto(prevUrl, {
                 waitUntil: 'networkidle',  // Wait for all network requests
                 timeout: 45000
             });
-            
+
             // CRITICAL: Wait for GA4 cookies to be set
             await this._waitForGA4();
-            
+
             // Additional wait to ensure cookies are written
             await this._sleep(this.randomWaitMs);
             this.logger.info(`✅ Previous URL visited, cookie created, waited ${this.randomWaitMs}ms`);
-            
+
         } catch (error) {
+            this.replay.logError('previous_url', error.message);
             this.logger.warn(`❌ Failed to visit previous URL: ${error.message}`);
         }
     }
@@ -277,10 +319,13 @@ class AutomaticVisitor {
                 await this._verifyExtension();
             }
 
-            const loadTime = (Date.now() - loadStartTime) / 1000;
+            const loadTimeMs = Date.now() - loadStartTime;
+            const loadTime = loadTimeMs / 1000;
             const pageTitle = await this.page.title().catch(() => 'Unknown');
             const currentUrl = this.page.url();
-            
+
+            this.replay.logNavigation(currentUrl, loadTimeMs, pageTitle);
+
             this.logger.info(`✅ Page fully loaded: ${loadTime.toFixed(2)}s`);
             this.logger.info(`URL to be visited: ${this.campaignUrl}`);
             this.logger.info(`Page title: ${pageTitle}`);
@@ -299,6 +344,7 @@ class AutomaticVisitor {
             }
 
         } catch (error) {
+            this.replay.logError('first_page', error.message);
             this.logger.error(`Failed to load first page: ${error.message}`);
             throw error;
         }
@@ -377,7 +423,10 @@ class AutomaticVisitor {
                 // CRITICAL: Wait for GA4 to fire page_view event
                 await this._waitForGA4();
 
-                const loadTime = (Date.now() - loadStartTime) / 1000;
+                const loadTimeMs = Date.now() - loadStartTime;
+                const loadTime = loadTimeMs / 1000;
+                const pageTitle = await this.page.title().catch(() => '');
+                this.replay.logNavigation(linkUrl, loadTimeMs, pageTitle);
                 this.logger.info(`✅ Page ${i + 2} loaded: ${loadTime.toFixed(2)}s - ${linkUrl}`);
 
                 // Simulate user behavior on the new page
@@ -398,6 +447,7 @@ class AutomaticVisitor {
                 links = links.filter(l => l !== linkUrl);
 
             } catch (error) {
+                this.replay.logError(`page_${i + 2}`, error.message);
                 this.logger.error(`Exception on URL ${i + 2}: ${error.message}`);
                 // Continue with remaining pages
             }
@@ -542,22 +592,27 @@ class AutomaticVisitor {
         
         // STEP 3: Check for GA4/GTM and wait for events to fire
         let gaDetected = false;
+        let gaDetails = {};
         try {
-            gaDetected = await this.page.evaluate(() => {
-                return !!(
-                    window.gtag || 
-                    window.dataLayer || 
-                    window.ga || 
-                    window.google_tag_manager ||
-                    document.querySelector('script[src*="googletagmanager"]') ||
-                    document.querySelector('script[src*="google-analytics"]') ||
-                    document.querySelector('script[src*="gtag/js"]')
-                );
+            gaDetails = await this.page.evaluate(() => {
+                return {
+                    hasGtag: !!window.gtag,
+                    hasDataLayer: !!window.dataLayer,
+                    hasGTM: !!window.google_tag_manager,
+                    hasGA: !!window.ga,
+                    hasScript: !!(
+                        document.querySelector('script[src*="googletagmanager"]') ||
+                        document.querySelector('script[src*="google-analytics"]') ||
+                        document.querySelector('script[src*="gtag/js"]')
+                    ),
+                };
             });
+            gaDetected = gaDetails.hasGtag || gaDetails.hasDataLayer || gaDetails.hasGA ||
+                         gaDetails.hasGTM || gaDetails.hasScript;
         } catch (e) {
             // Ignore
         }
-        
+
         // STEP 4: MANDATORY wait for GA4 events to fire
         // This is CRITICAL - GA4 needs time after script load to:
         // - Initialize tracking
@@ -582,6 +637,7 @@ class AutomaticVisitor {
         }
         
         const totalWait = Date.now() - startTime;
+        this.replay.logGA4Detection(gaDetected, { ...gaDetails, waitTimeMs: totalWait });
         this.logger.info(`✅ Page ready after ${(totalWait/1000).toFixed(1)}s`);
     }
 
@@ -887,7 +943,9 @@ class AutomaticVisitor {
                             headers: response.headers,
                             body: response.body,
                         });
+                        self.replay.logRequest(url, true, true);
                     } catch (e) {
+                        self.replay.logError('proxy_collect', e.message);
                         self.logger.debug(`/collect proxy failed, fallback direct: ${e.message}`);
                         await route.continue();
                     }
@@ -897,8 +955,14 @@ class AutomaticVisitor {
                 self.proxyRouter.stats.totalRequests++;
                 self.proxyRouter.stats.directRequests++;
                 if (isGAScript(url)) self.proxyRouter.stats.scriptsLoadedDirect++;
+                if (isGAScript(url)) self.replay.logRequest(url, true, false);
                 await route.continue();
                 return;
+            }
+
+            // 3b. No proxy but still track GA /collect requests for replay
+            if (isGACollectRequest(url)) {
+                self.replay.logRequest(url, true, false);
             }
             
             // 4. No proxy — just continue
@@ -921,6 +985,24 @@ class AutomaticVisitor {
             Object.defineProperty(navigator, 'languages', { get: () => langs });
             window.chrome = { runtime: {} };
         }, languages);
+    }
+
+    /**
+     * Save session replay JSON to data/replays/
+     */
+    _saveReplay() {
+        try {
+            if (!this.replay) return;
+            fs.mkdirSync(REPLAYS_DIR, { recursive: true });
+            const ts = Date.now();
+            const filename = `replay_${this.threadId}_${ts}.json`;
+            const filepath = path.join(REPLAYS_DIR, filename);
+            const summary = this.replay.getSummary();
+            fs.writeFileSync(filepath, JSON.stringify(summary, null, 2));
+            this.logger.debug(`Replay saved: ${filename}`);
+        } catch (error) {
+            this.logger.debug(`Failed to save replay: ${error.message}`);
+        }
     }
 
     /**
