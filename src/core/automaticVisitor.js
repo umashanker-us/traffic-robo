@@ -298,36 +298,42 @@ class AutomaticVisitor {
     async _visitFirstPage() {
         this.logger.info(`Navigating to campaign URL: ${this.campaignUrl}`);
         const loadStartTime = Date.now();
+        const isBounce = this.visit.isBounce();
 
         try {
+            // Bounce visits: use 'domcontentloaded' — proceed as soon as HTML is parsed
+            // Non-bounce visits: use 'load' — wait for full page (images, CSS, etc.)
+            const waitStrategy = isBounce ? 'domcontentloaded' : 'load';
+            const navTimeout = isBounce ? 15000 : 60000;
+
             // Handle referer navigation
             if (this.isReferer && this.referer) {
                 await this.page.goto(this.referer, {
-                    waitUntil: 'load',
-                    timeout: 60000
+                    waitUntil: isBounce ? 'domcontentloaded' : 'load',
+                    timeout: navTimeout
                 });
-                await this._sleep(1000); // Brief pause on referer page
+                if (!isBounce) await this._sleep(1000); // Brief pause on referer page (skip for bounce)
                 await this.page.evaluate((url) => {
                     window.location.href = url;
                 }, this.campaignUrl);
-                await this.page.waitForLoadState('load', { timeout: 60000 });
+                await this.page.waitForLoadState(waitStrategy, { timeout: navTimeout });
             } else {
                 await this.page.goto(this.campaignUrl, {
-                    waitUntil: 'load',
-                    timeout: 60000
+                    waitUntil: waitStrategy,
+                    timeout: navTimeout
                 });
             }
 
             // CRITICAL: Wait for GA4/GTM scripts to initialize and fire events
-            // For bounce visits, use fast check to stay UNDER 10 seconds total
-            if (this.visit.isBounce()) {
+            // For bounce visits, use fast poll to stay UNDER 10 seconds total
+            if (isBounce) {
                 await this._waitForGA4Bounce();
             } else {
                 await this._waitForGA4();
             }
 
-            // Verify extension is working (if enabled)
-            if (this.extensionEnabled && this.extensionLoaded) {
+            // Verify extension is working (if enabled) — skip for bounce
+            if (!isBounce && this.extensionEnabled && this.extensionLoaded) {
                 await this._verifyExtension();
             }
 
@@ -338,19 +344,14 @@ class AutomaticVisitor {
 
             this.replay.logNavigation(currentUrl, loadTimeMs, pageTitle);
 
-            this.logger.info(`✅ Page fully loaded: ${loadTime.toFixed(2)}s`);
-            this.logger.info(`URL to be visited: ${this.campaignUrl}`);
-            this.logger.info(`Page title: ${pageTitle}`);
-            this.logger.info(`Current URL: ${currentUrl}`);
-
-            // Simulate realistic user behavior
-            if (this.visit.isBounce()) {
-                // Bounce visit - brief glance then leave (0.5-2s)
-                // CRITICAL: Total page time must stay UNDER 10 seconds for GA4 bounce
-                const bounceGlance = 500 + Math.random() * 1500;
-                this.logger.info(`🔴 Bounce visit - quick glance ${(bounceGlance/1000).toFixed(1)}s then leaving`);
-                await this._sleep(bounceGlance);
+            if (isBounce) {
+                this.logger.info(`🔴 BOUNCE: GA4 handled, exiting after ${loadTime.toFixed(1)}s total (under 10s ✅)`);
             } else {
+                this.logger.info(`✅ Page fully loaded: ${loadTime.toFixed(2)}s`);
+                this.logger.info(`URL to be visited: ${this.campaignUrl}`);
+                this.logger.info(`Page title: ${pageTitle}`);
+                this.logger.info(`Current URL: ${currentUrl}`);
+
                 // Non-bounce - real user behavior simulation
                 await this._simulateUserBehavior();
             }
@@ -656,53 +657,64 @@ class AutomaticVisitor {
     }
 
     /**
-     * Fast GA4 wait for bounce visits — total 1-3 seconds
-     * Skips DOM complete, networkidle, and final network check.
-     * Just detects GA4 script presence and waits briefly for page_view to fire.
+     * Fast GA4 wait for bounce visits — poll then exit (1-4 seconds total)
+     *
+     * Strategy: Poll every 500ms for GA4 script presence (max 3 seconds).
+     * As soon as GA4 detected OR timeout: wait 1-1.5s for page_view beacon.
+     * NO DOM complete, NO networkidle, NO scrolling, NO mouse movement.
      * CRITICAL: Keeps total bounce page time UNDER 10 seconds so GA4 counts it as bounce.
      */
     async _waitForGA4Bounce() {
         if (!this.page) return;
         const startTime = Date.now();
-        this.logger.info(`⏳ Bounce: quick GA4 check...`);
+        this.logger.info(`⏳ Bounce: polling for GA4 (max 3s)...`);
 
-        // Quick GA4 script detection only (no DOM/networkidle waits)
+        // Poll every 500ms for GA4 script presence, max 3 seconds (6 polls)
         let gaDetected = false;
         let gaDetails = {};
-        try {
-            gaDetails = await this.page.evaluate(() => {
-                return {
-                    hasGtag: !!window.gtag,
-                    hasDataLayer: !!window.dataLayer,
-                    hasGTM: !!window.google_tag_manager,
-                    hasGA: !!window.ga,
-                    hasScript: !!(
-                        document.querySelector('script[src*="googletagmanager"]') ||
-                        document.querySelector('script[src*="google-analytics"]') ||
-                        document.querySelector('script[src*="gtag/js"]')
-                    ),
-                };
-            });
-            gaDetected = gaDetails.hasGtag || gaDetails.hasDataLayer || gaDetails.hasGA ||
-                         gaDetails.hasGTM || gaDetails.hasScript;
-        } catch (e) {
-            // Ignore
+        const maxPollTime = 3000;
+        const pollInterval = 500;
+
+        while (Date.now() - startTime < maxPollTime) {
+            try {
+                gaDetails = await this.page.evaluate(() => {
+                    return {
+                        hasGtag: !!window.gtag,
+                        hasDataLayer: !!window.dataLayer,
+                        hasGTM: !!window.google_tag_manager,
+                        hasGA: !!window.ga,
+                        hasScript: !!(
+                            document.querySelector('script[src*="googletagmanager"]') ||
+                            document.querySelector('script[src*="google-analytics"]') ||
+                            document.querySelector('script[src*="gtag/js"]')
+                        ),
+                    };
+                });
+                gaDetected = gaDetails.hasGtag || gaDetails.hasDataLayer || gaDetails.hasGA ||
+                             gaDetails.hasGTM || gaDetails.hasScript;
+                if (gaDetected) break;
+            } catch (e) {
+                // Page may not be ready yet, continue polling
+            }
+            await this._sleep(pollInterval);
         }
 
-        // Brief wait for page_view beacon to fire (much shorter than normal)
+        const detectTime = ((Date.now() - startTime) / 1000).toFixed(1);
+
+        // Brief wait for page_view beacon to fire
         if (gaDetected) {
-            const gaWait = 1500 + Math.random() * 1000; // 1.5-2.5 seconds
-            this.logger.info(`✅ GA4 found (bounce) - waiting ${(gaWait/1000).toFixed(1)}s for page_view`);
-            await this._sleep(gaWait);
+            const beaconWait = 1000 + Math.random() * 500; // 1-1.5 seconds
+            this.logger.info(`✅ GA4 detected in ${detectTime}s, waiting ${(beaconWait/1000).toFixed(1)}s for beacon`);
+            await this._sleep(beaconWait);
         } else {
-            const minWait = 800 + Math.random() * 400; // 0.8-1.2 seconds
-            this.logger.info(`⚠️ No GA4 (bounce) - waiting ${(minWait/1000).toFixed(1)}s`);
+            const minWait = 500 + Math.random() * 500; // 0.5-1 seconds
+            this.logger.info(`⚠️ No GA4 after ${detectTime}s, waiting ${(minWait/1000).toFixed(1)}s then exiting`);
             await this._sleep(minWait);
         }
 
         const totalWait = Date.now() - startTime;
         this.replay.logGA4Detection(gaDetected, { ...gaDetails, waitTimeMs: totalWait, bounce: true });
-        this.logger.info(`✅ Bounce GA4 check done in ${(totalWait/1000).toFixed(1)}s`);
+        this.logger.info(`BOUNCE: exiting after ${(totalWait/1000).toFixed(1)}s total (under 10s ✅)`);
     }
 
     /**
