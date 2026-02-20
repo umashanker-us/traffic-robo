@@ -15,6 +15,7 @@ const { getUserAgentList, getMatchingScreenSize, getMixedScreenSizes } = require
 const AutomaticVisitor = require('./automaticVisitor');
 const ManualVisitor = require('./manualVisitor');
 const { SessionReplayStore } = require('../helpers/sessionReplay');
+const { resolveTrafficSource } = require('../helpers/trafficSource');
 
 const logger = getLogger();
 
@@ -81,7 +82,22 @@ class VisitLogic {
             blockMedia = false,
             blockFonts = false,
             blockStyles = false,
-            blockScripts = false
+            blockScripts = false,
+            // Traffic Source
+            trafficSourceType = '',
+            searchEngine = 'Google',
+            searchKeywords = '',
+            referralUrls = '',
+            socialPlatforms = [],
+            utmSource = '',
+            utmMedium = '',
+            utmCampaign = '',
+            utmTerm = '',
+            utmContent = '',
+            mixedDirect = 25,
+            mixedOrganic = 35,
+            mixedReferral = 20,
+            mixedSocial = 20
         } = config;
 
         const startTime = Date.now();
@@ -150,6 +166,18 @@ class VisitLogic {
             logger.info(`Fast Mode ENABLED - Blocking: ${blockImages ? 'Images ' : ''}${blockMedia ? 'Media ' : ''}${blockFonts ? 'Fonts ' : ''}${blockStyles ? 'CSS ' : ''}${blockScripts ? 'JS' : ''}`);
         }
         
+        // Log traffic source
+        if (trafficSourceType && trafficSourceType !== 'Direct') {
+            logger.info(`Traffic Source: ${trafficSourceType}`);
+            if (trafficSourceType === 'Mixed') {
+                logger.info(`  Mix: Direct ${mixedDirect}% | Organic ${mixedOrganic}% | Referral ${mixedReferral}% | Social ${mixedSocial}%`);
+            }
+        } else if (!trafficSourceType) {
+            logger.info(`Traffic Source: Legacy (referer list)`);
+        } else {
+            logger.info(`Traffic Source: Direct`);
+        }
+
         // Log returning users
         logger.info(`Returning Users: ${percOldUsers}%`);
         if (percOldUsers === 100 && !previousURL && !useBaseUrlForOldUser) {
@@ -192,7 +220,21 @@ class VisitLogic {
                     blockMedia,
                     blockFonts,
                     blockStyles,
-                    blockScripts
+                    blockScripts,
+                    trafficSourceType,
+                    searchEngine,
+                    searchKeywords,
+                    referralUrls,
+                    socialPlatforms,
+                    utmSource,
+                    utmMedium,
+                    utmCampaign,
+                    utmTerm,
+                    utmContent,
+                    mixedDirect,
+                    mixedOrganic,
+                    mixedReferral,
+                    mixedSocial
                 });
             } else {
                 await this._runManualMode({
@@ -242,8 +284,20 @@ class VisitLogic {
             screenSizes, oldUserFlags, restrictToPrimaryDomain,
             previousURL, useBaseUrlForOldUser, playMode, adsBlock, proxyEnabled, proxyUrl,
             location, extensionEnabled, extensionPath, ipRotation,
-            fastMode, blockImages, blockMedia, blockFonts, blockStyles, blockScripts
+            fastMode, blockImages, blockMedia, blockFonts, blockStyles, blockScripts,
+            trafficSourceType, searchEngine, searchKeywords, referralUrls,
+            socialPlatforms, utmSource, utmMedium, utmCampaign,
+            utmTerm, utmContent, mixedDirect, mixedOrganic,
+            mixedReferral, mixedSocial
         } = config;
+
+        // Build traffic source config for per-visit resolution
+        const trafficSourceConfig = trafficSourceType ? {
+            trafficSourceType, searchEngine, searchKeywords,
+            referralUrls, socialPlatforms, utmSource, utmMedium,
+            utmCampaign, utmTerm, utmContent,
+            mixedDirect, mixedOrganic, mixedReferral, mixedSocial
+        } : null;
 
         const PQueue = (await import('p-queue')).default;
         const queue = new PQueue({ concurrency: threads });
@@ -273,7 +327,7 @@ class VisitLogic {
                     if (!this.isRunning) break;
 
                     const visitIndex = (batchNum * 100) + i + 1;
-                    const referer = shuffledReferers[i % shuffledReferers.length];
+                    const legacyReferer = shuffledReferers[i % shuffledReferers.length];
 
                     queue.add(async () => {
                         if (!this.isRunning) return;
@@ -282,7 +336,7 @@ class VisitLogic {
                         if (visitIndex > 1 && threadDelay > 0) {
                             await this._delay(threadDelay * 1000);
                         }
-                        
+
                         if (!this.isRunning) return;
 
                         // Memory cleanup check
@@ -293,10 +347,23 @@ class VisitLogic {
 
                         this._notifyVisitStarted();
 
+                        // Resolve traffic source per visit (new) or use legacy referer
+                        let resolvedReferer, resolvedIsReferer, resolvedCampaignUrl;
+                        if (trafficSourceConfig) {
+                            const resolved = resolveTrafficSource(trafficSourceConfig, campaignUrl);
+                            resolvedReferer = resolved.referer;
+                            resolvedIsReferer = resolved.isReferer;
+                            resolvedCampaignUrl = resolved.campaignUrl;
+                        } else {
+                            resolvedReferer = legacyReferer;
+                            resolvedIsReferer = isReferer;
+                            resolvedCampaignUrl = campaignUrl;
+                        }
+
                         const visitor = new AutomaticVisitor({
-                            campaignUrl,
-                            referer,
-                            isReferer,
+                            campaignUrl: resolvedCampaignUrl,
+                            referer: resolvedReferer,
+                            isReferer: resolvedIsReferer,
                             userAgent: shuffledUA[i],
                             threadId: visitIndex,
                             visit: shuffledVisits[i],

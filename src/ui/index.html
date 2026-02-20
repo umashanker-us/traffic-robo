@@ -565,14 +565,105 @@
                         <textarea id="campaignLinks" class="large-textarea" placeholder="https://example.com?utm_source=google&utm_medium=cpc"></textarea>
                     </div>
 
-                    <div class="checkbox-group">
-                        <input type="checkbox" id="isReferer">
-                        <label class="checkbox-label" for="isReferer">Use Referer Source</label>
+                    <div class="form-group">
+                        <label>Traffic Source</label>
+                        <select id="trafficSourceType" onchange="toggleTrafficSource()">
+                            <option value="Direct">Direct (no referer/UTM)</option>
+                            <option value="Organic Search">Organic Search</option>
+                            <option value="Referral">Referral</option>
+                            <option value="Social">Social</option>
+                            <option value="UTM Campaign">UTM Campaign</option>
+                            <option value="Mixed">Mixed (percentage-based)</option>
+                        </select>
                     </div>
 
-                    <div class="form-group">
-                        <label>Referer URLs (one per line)</label>
-                        <textarea id="refererLinks" placeholder="https://google.com&#10;https://facebook.com"></textarea>
+                    <!-- Organic Search options -->
+                    <div id="tsOrganic" style="display:none;padding:10px;background:var(--bg-input);border-radius:6px;margin-bottom:12px;">
+                        <div class="form-group" style="margin-bottom:8px;">
+                            <label>Search Engine</label>
+                            <select id="searchEngine">
+                                <option value="Google">Google</option>
+                                <option value="Bing">Bing</option>
+                                <option value="Yahoo">Yahoo</option>
+                                <option value="DuckDuckGo">DuckDuckGo</option>
+                            </select>
+                        </div>
+                        <div class="form-group" style="margin-bottom:0;">
+                            <label>Keywords (one per line, random pick per visit)</label>
+                            <textarea id="searchKeywords" rows="3" placeholder="best seo tools&#10;digital marketing&#10;web analytics"></textarea>
+                        </div>
+                    </div>
+
+                    <!-- Referral options -->
+                    <div id="tsReferral" style="display:none;padding:10px;background:var(--bg-input);border-radius:6px;margin-bottom:12px;">
+                        <div class="form-group" style="margin-bottom:0;">
+                            <label>Referral URLs (one per line, random pick per visit)</label>
+                            <textarea id="referralUrls" rows="3" placeholder="https://blog.example.com&#10;https://news.ycombinator.com&#10;https://reddit.com/r/webdev"></textarea>
+                        </div>
+                    </div>
+
+                    <!-- Social options -->
+                    <div id="tsSocial" style="display:none;padding:10px;background:var(--bg-input);border-radius:6px;margin-bottom:12px;">
+                        <label style="margin-bottom:6px;">Platforms (random pick per visit)</label>
+                        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;">
+                            <div class="checkbox-group"><input type="checkbox" id="socialFacebook" checked><label class="checkbox-label" for="socialFacebook">Facebook</label></div>
+                            <div class="checkbox-group"><input type="checkbox" id="socialTwitter" checked><label class="checkbox-label" for="socialTwitter">Twitter/X</label></div>
+                            <div class="checkbox-group"><input type="checkbox" id="socialLinkedIn"><label class="checkbox-label" for="socialLinkedIn">LinkedIn</label></div>
+                            <div class="checkbox-group"><input type="checkbox" id="socialInstagram"><label class="checkbox-label" for="socialInstagram">Instagram</label></div>
+                            <div class="checkbox-group"><input type="checkbox" id="socialYouTube"><label class="checkbox-label" for="socialYouTube">YouTube</label></div>
+                        </div>
+                    </div>
+
+                    <!-- UTM Campaign options -->
+                    <div id="tsUTM" style="display:none;padding:10px;background:var(--bg-input);border-radius:6px;margin-bottom:12px;">
+                        <div class="form-row" style="margin-bottom:8px;">
+                            <div class="form-group" style="margin-bottom:0;">
+                                <label>utm_source *</label>
+                                <input type="text" id="utmSource" placeholder="google">
+                            </div>
+                            <div class="form-group" style="margin-bottom:0;">
+                                <label>utm_medium *</label>
+                                <input type="text" id="utmMedium" placeholder="cpc">
+                            </div>
+                            <div class="form-group" style="margin-bottom:0;">
+                                <label>utm_campaign *</label>
+                                <input type="text" id="utmCampaign" placeholder="spring_sale">
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group" style="margin-bottom:0;">
+                                <label>utm_term (optional)</label>
+                                <input type="text" id="utmTerm" placeholder="running shoes">
+                            </div>
+                            <div class="form-group" style="margin-bottom:0;">
+                                <label>utm_content (optional)</label>
+                                <input type="text" id="utmContent" placeholder="banner_ad">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Mixed options -->
+                    <div id="tsMixed" style="display:none;padding:10px;background:var(--bg-input);border-radius:6px;margin-bottom:12px;">
+                        <label style="margin-bottom:6px;">Traffic Mix (must total 100%)</label>
+                        <div class="form-row" style="margin-bottom:4px;">
+                            <div class="form-group" style="margin-bottom:0;">
+                                <label>Direct %</label>
+                                <input type="number" id="mixedDirect" value="25" min="0" max="100" onchange="updateMixedTotal()">
+                            </div>
+                            <div class="form-group" style="margin-bottom:0;">
+                                <label>Organic %</label>
+                                <input type="number" id="mixedOrganic" value="35" min="0" max="100" onchange="updateMixedTotal()">
+                            </div>
+                            <div class="form-group" style="margin-bottom:0;">
+                                <label>Referral %</label>
+                                <input type="number" id="mixedReferral" value="20" min="0" max="100" onchange="updateMixedTotal()">
+                            </div>
+                            <div class="form-group" style="margin-bottom:0;">
+                                <label>Social %</label>
+                                <input type="number" id="mixedSocial" value="20" min="0" max="100" onchange="updateMixedTotal()">
+                            </div>
+                        </div>
+                        <div id="mixedTotalMsg" style="font-size:11px;color:var(--success);">Total: 100%</div>
                     </div>
                 </div>
 
@@ -1087,12 +1178,20 @@ gate.decodo.com:7000:user-country-in-city-delhi:password"
         }
 
         // Get form configuration
+        function getSelectedSocialPlatforms() {
+            const platforms = [];
+            if (document.getElementById('socialFacebook').checked) platforms.push('Facebook');
+            if (document.getElementById('socialTwitter').checked) platforms.push('Twitter/X');
+            if (document.getElementById('socialLinkedIn').checked) platforms.push('LinkedIn');
+            if (document.getElementById('socialInstagram').checked) platforms.push('Instagram');
+            if (document.getElementById('socialYouTube').checked) platforms.push('YouTube');
+            return platforms;
+        }
+
         function getConfig() {
             return {
                 campaignName: document.getElementById('campaignName').value,
                 campaignLinks: document.getElementById('campaignLinks').value,
-                refererLinks: document.getElementById('refererLinks').value,
-                isReferer: document.getElementById('isReferer').checked,
                 repeat: document.getElementById('repeat').value,
                 threads: document.getElementById('threads').value,
                 threadDelay: document.getElementById('threadDelay').value,
@@ -1125,7 +1224,22 @@ gate.decodo.com:7000:user-country-in-city-delhi:password"
                 blockMedia: document.getElementById('blockMedia').checked,
                 blockFonts: document.getElementById('blockFonts').checked,
                 blockStyles: document.getElementById('blockStyles').checked,
-                blockScripts: document.getElementById('blockScripts').checked
+                blockScripts: document.getElementById('blockScripts').checked,
+                // Traffic Source settings
+                trafficSourceType: document.getElementById('trafficSourceType').value,
+                searchEngine: document.getElementById('searchEngine').value,
+                searchKeywords: document.getElementById('searchKeywords').value,
+                referralUrls: document.getElementById('referralUrls').value,
+                socialPlatforms: getSelectedSocialPlatforms(),
+                utmSource: document.getElementById('utmSource').value,
+                utmMedium: document.getElementById('utmMedium').value,
+                utmCampaign: document.getElementById('utmCampaign').value,
+                utmTerm: document.getElementById('utmTerm').value,
+                utmContent: document.getElementById('utmContent').value,
+                mixedDirect: document.getElementById('mixedDirect').value,
+                mixedOrganic: document.getElementById('mixedOrganic').value,
+                mixedReferral: document.getElementById('mixedReferral').value,
+                mixedSocial: document.getElementById('mixedSocial').value
             };
         }
 
@@ -1133,8 +1247,13 @@ gate.decodo.com:7000:user-country-in-city-delhi:password"
         function setConfig(config) {
             if (config.campaignName) document.getElementById('campaignName').value = config.campaignName;
             if (config.campaignLinks) document.getElementById('campaignLinks').value = config.campaignLinks;
-            if (config.refererLinks) document.getElementById('refererLinks').value = config.refererLinks;
-            if (config.isReferer !== undefined) document.getElementById('isReferer').checked = config.isReferer;
+
+            // Backward compat: old config with refererLinks/isReferer → convert to Referral type
+            if (!config.trafficSourceType && config.isReferer && config.refererLinks) {
+                document.getElementById('trafficSourceType').value = 'Referral';
+                document.getElementById('referralUrls').value = config.refererLinks;
+                toggleTrafficSource();
+            }
             if (config.repeat) document.getElementById('repeat').value = config.repeat;
             if (config.threads) document.getElementById('threads').value = config.threads;
             if (config.threadDelay) document.getElementById('threadDelay').value = config.threadDelay;
@@ -1179,6 +1298,30 @@ gate.decodo.com:7000:user-country-in-city-delhi:password"
             if (config.blockFonts !== undefined) document.getElementById('blockFonts').checked = config.blockFonts;
             if (config.blockStyles !== undefined) document.getElementById('blockStyles').checked = config.blockStyles;
             if (config.blockScripts !== undefined) document.getElementById('blockScripts').checked = config.blockScripts;
+            // Traffic Source settings
+            if (config.trafficSourceType) {
+                document.getElementById('trafficSourceType').value = config.trafficSourceType;
+                toggleTrafficSource();
+            }
+            if (config.searchEngine) document.getElementById('searchEngine').value = config.searchEngine;
+            if (config.searchKeywords) document.getElementById('searchKeywords').value = config.searchKeywords;
+            if (config.referralUrls) document.getElementById('referralUrls').value = config.referralUrls;
+            if (config.socialPlatforms && Array.isArray(config.socialPlatforms)) {
+                document.getElementById('socialFacebook').checked = config.socialPlatforms.includes('Facebook');
+                document.getElementById('socialTwitter').checked = config.socialPlatforms.includes('Twitter/X');
+                document.getElementById('socialLinkedIn').checked = config.socialPlatforms.includes('LinkedIn');
+                document.getElementById('socialInstagram').checked = config.socialPlatforms.includes('Instagram');
+                document.getElementById('socialYouTube').checked = config.socialPlatforms.includes('YouTube');
+            }
+            if (config.utmSource) document.getElementById('utmSource').value = config.utmSource;
+            if (config.utmMedium) document.getElementById('utmMedium').value = config.utmMedium;
+            if (config.utmCampaign) document.getElementById('utmCampaign').value = config.utmCampaign;
+            if (config.utmTerm) document.getElementById('utmTerm').value = config.utmTerm;
+            if (config.utmContent) document.getElementById('utmContent').value = config.utmContent;
+            if (config.mixedDirect !== undefined) document.getElementById('mixedDirect').value = config.mixedDirect;
+            if (config.mixedOrganic !== undefined) document.getElementById('mixedOrganic').value = config.mixedOrganic;
+            if (config.mixedReferral !== undefined) document.getElementById('mixedReferral').value = config.mixedReferral;
+            if (config.mixedSocial !== undefined) document.getElementById('mixedSocial').value = config.mixedSocial;
         }
 
         // Toggle proxy settings visibility
@@ -1214,6 +1357,54 @@ gate.decodo.com:7000:user-country-in-city-delhi:password"
             }
         }
         
+        // Toggle traffic source subsections
+        function toggleTrafficSource() {
+            const type = document.getElementById('trafficSourceType').value;
+            document.getElementById('tsOrganic').style.display = 'none';
+            document.getElementById('tsReferral').style.display = 'none';
+            document.getElementById('tsSocial').style.display = 'none';
+            document.getElementById('tsUTM').style.display = 'none';
+            document.getElementById('tsMixed').style.display = 'none';
+
+            switch (type) {
+                case 'Organic Search':
+                    document.getElementById('tsOrganic').style.display = 'block';
+                    break;
+                case 'Referral':
+                    document.getElementById('tsReferral').style.display = 'block';
+                    break;
+                case 'Social':
+                    document.getElementById('tsSocial').style.display = 'block';
+                    break;
+                case 'UTM Campaign':
+                    document.getElementById('tsUTM').style.display = 'block';
+                    break;
+                case 'Mixed':
+                    document.getElementById('tsMixed').style.display = 'block';
+                    document.getElementById('tsOrganic').style.display = 'block';
+                    document.getElementById('tsReferral').style.display = 'block';
+                    document.getElementById('tsSocial').style.display = 'block';
+                    break;
+            }
+        }
+
+        // Update mixed mode total percentage
+        function updateMixedTotal() {
+            const d = parseInt(document.getElementById('mixedDirect').value) || 0;
+            const o = parseInt(document.getElementById('mixedOrganic').value) || 0;
+            const r = parseInt(document.getElementById('mixedReferral').value) || 0;
+            const s = parseInt(document.getElementById('mixedSocial').value) || 0;
+            const total = d + o + r + s;
+            const el = document.getElementById('mixedTotalMsg');
+            if (total === 100) {
+                el.textContent = 'Total: 100%';
+                el.style.color = 'var(--success)';
+            } else {
+                el.textContent = 'Total: ' + total + '% (must be 100%)';
+                el.style.color = 'var(--danger)';
+            }
+        }
+
         // Toggle fast mode options visibility
         function toggleFastMode() {
             const enabled = document.getElementById('fastMode').checked;
@@ -1418,8 +1609,6 @@ gate.decodo.com:7000:user-country-in-city-delhi:password"
         function resetForm() {
             document.getElementById('campaignName').value = '';
             document.getElementById('campaignLinks').value = '';
-            document.getElementById('refererLinks').value = '';
-            document.getElementById('isReferer').checked = false;
             document.getElementById('repeat').value = '100';
             document.getElementById('threads').value = '5';
             document.getElementById('threadDelay').value = '1';
@@ -1456,9 +1645,30 @@ gate.decodo.com:7000:user-country-in-city-delhi:password"
             document.getElementById('extensionName').textContent = 'No extension loaded';
             document.getElementById('extensionInfo').classList.add('not-loaded');
             
+            // Traffic Source reset
+            document.getElementById('trafficSourceType').value = 'Direct';
+            document.getElementById('searchEngine').value = 'Google';
+            document.getElementById('searchKeywords').value = '';
+            document.getElementById('referralUrls').value = '';
+            document.getElementById('socialFacebook').checked = true;
+            document.getElementById('socialTwitter').checked = true;
+            document.getElementById('socialLinkedIn').checked = false;
+            document.getElementById('socialInstagram').checked = false;
+            document.getElementById('socialYouTube').checked = false;
+            document.getElementById('utmSource').value = '';
+            document.getElementById('utmMedium').value = '';
+            document.getElementById('utmCampaign').value = '';
+            document.getElementById('utmTerm').value = '';
+            document.getElementById('utmContent').value = '';
+            document.getElementById('mixedDirect').value = '25';
+            document.getElementById('mixedOrganic').value = '35';
+            document.getElementById('mixedReferral').value = '20';
+            document.getElementById('mixedSocial').value = '20';
+
             toggleCommandArea();
             toggleProxySettings();
             toggleExtensionSettings();
+            toggleTrafficSource();
             addLog('info', 'Form reset to defaults');
         }
 
