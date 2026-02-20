@@ -32,6 +32,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getReplayList: () => ipcRenderer.invoke('get-replay-list'),
     clearReplays: () => ipcRenderer.invoke('clear-replays'),
 
+    // ===== Campaign Export =====
+    exportCampaignCSV: () => ipcRenderer.invoke('export-campaign-csv'),
+    exportCampaignJSON: () => ipcRenderer.invoke('export-campaign-json'),
+    getCampaignResultsCount: () => ipcRenderer.invoke('get-campaign-results-count'),
+
     // ===== Event Listeners =====
     onVisitStarted: (callback) => {
         const subscription = (_event) => callback();
@@ -58,10 +63,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.on('replay-updated', subscription);
         return () => ipcRenderer.removeListener('replay-updated', subscription);
     },
+    onSimulationComplete: (callback) => {
+        const subscription = (_event, data) => callback(data);
+        ipcRenderer.on('simulation-complete', subscription);
+        return () => ipcRenderer.removeListener('simulation-complete', subscription);
+    },
 
     // ===== Cleanup =====
     removeAllListeners: (channel) => {
-        const validChannels = ['visit-started', 'visit-completed', 'session-event', 'proxy-stats-update', 'replay-updated'];
+        const validChannels = ['visit-started', 'visit-completed', 'session-event', 'proxy-stats-update', 'replay-updated', 'simulation-complete'];
         if (validChannels.includes(channel)) {
             ipcRenderer.removeAllListeners(channel);
         }
