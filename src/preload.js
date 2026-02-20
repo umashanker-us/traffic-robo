@@ -47,10 +47,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.on('session-event', subscription);
         return () => ipcRenderer.removeListener('session-event', subscription);
     },
+    onProxyStats: (callback) => {
+        const subscription = (_event, data) => callback(data);
+        ipcRenderer.on('proxy-stats-update', subscription);
+        return () => ipcRenderer.removeListener('proxy-stats-update', subscription);
+    },
 
     // ===== Cleanup =====
     removeAllListeners: (channel) => {
-        const validChannels = ['visit-started', 'visit-completed', 'session-event'];
+        const validChannels = ['visit-started', 'visit-completed', 'session-event', 'proxy-stats-update'];
         if (validChannels.includes(channel)) {
             ipcRenderer.removeAllListeners(channel);
         }

@@ -311,7 +311,8 @@ class VisitLogic {
                             blockMedia,
                             blockFonts,
                             blockStyles,
-                            blockScripts
+                            blockScripts,
+                            onProxyStats: (data) => this._notifyProxyStats(data)
                         });
 
                         // Track active visitor
@@ -531,6 +532,15 @@ class VisitLogic {
         this.completedVisits++;
         if (this.listener && this.listener.uniqueVisit) {
             this.listener.uniqueVisit(this.completedVisits);
+        }
+    }
+
+    /**
+     * Notify listener about proxy stats update
+     */
+    _notifyProxyStats(data) {
+        if (this.listener && this.listener.proxyStatsUpdate) {
+            this.listener.proxyStatsUpdate(data);
         }
     }
 

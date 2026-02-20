@@ -766,6 +766,53 @@ gate.decodo.com:7000:user-country-in-city-delhi:password"
                     </div>
                 </div>
             </div>
+
+            <!-- Proxy Stats Panel (full width, below monitor grid) -->
+            <div class="card" id="proxyStatsPanel" style="display:none;margin-top:14px;">
+                <div class="card-title" style="display:flex;justify-content:space-between;align-items:center;">
+                    🔒 Live Proxy Stats
+                    <span style="display:flex;gap:8px;align-items:center;">
+                        <span id="proxyStatsStatus" style="font-size:11px;color:var(--text-muted);">Waiting...</span>
+                        <button onclick="clearProxyStats()" style="background:var(--bg-input);color:var(--text-muted);border:1px solid var(--border);border-radius:4px;padding:2px 8px;cursor:pointer;font-size:10px;">Clear</button>
+                    </span>
+                </div>
+
+                <!-- Counters row -->
+                <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:10px;">
+                    <div style="text-align:center;padding:6px;background:var(--bg-input);border-radius:6px;">
+                        <div id="proxyTotal" style="font-size:18px;font-weight:bold;color:var(--primary);">0</div>
+                        <div style="font-size:10px;color:var(--text-muted);">Total Req</div>
+                    </div>
+                    <div style="text-align:center;padding:6px;background:var(--bg-input);border-radius:6px;">
+                        <div id="proxyProxied" style="font-size:18px;font-weight:bold;color:#a78bfa;">0</div>
+                        <div style="font-size:10px;color:var(--text-muted);">Proxied</div>
+                    </div>
+                    <div style="text-align:center;padding:6px;background:var(--bg-input);border-radius:6px;">
+                        <div id="proxyDirect" style="font-size:18px;font-weight:bold;color:var(--success);">0</div>
+                        <div style="font-size:10px;color:var(--text-muted);">Direct</div>
+                    </div>
+                    <div style="text-align:center;padding:6px;background:var(--bg-input);border-radius:6px;">
+                        <div id="proxyScripts" style="font-size:18px;font-weight:bold;color:var(--warning);">0</div>
+                        <div style="font-size:10px;color:var(--text-muted);">Scripts</div>
+                    </div>
+                </div>
+
+                <!-- Bandwidth saved progress bar -->
+                <div style="margin-bottom:10px;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+                        <span style="font-size:11px;color:var(--text-muted);">Bandwidth Saved (Direct page loads avoided)</span>
+                        <span id="proxyBandwidthText" style="font-size:12px;font-weight:bold;color:var(--success);">0 KB</span>
+                    </div>
+                    <div style="height:8px;background:var(--bg-input);border-radius:4px;overflow:hidden;">
+                        <div id="proxyBandwidthBar" style="height:100%;background:linear-gradient(90deg,#a78bfa,var(--success));border-radius:4px;transition:width 0.5s ease;width:0%;"></div>
+                    </div>
+                </div>
+
+                <!-- Proxy rotation log (last 10) -->
+                <div class="log-output" id="proxyStatsLog" style="font-size:11px;max-height:150px;">
+                    <div class="log-entry log-info" style="opacity:0.5;">[Proxy] Waiting for proxied requests...</div>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -990,6 +1037,14 @@ gate.decodo.com:7000:user-country-in-city-delhi:password"
 
             updateUI(true);
             addLog('info', `Starting traffic simulation with ${totalVisits} visits...`);
+
+            // Proxy stats panel: show if proxy enabled, hide if not, clear previous stats
+            if (config.proxyEnabled && config.proxyUrl) {
+                document.getElementById('proxyStatsPanel').style.display = 'block';
+                clearProxyStats();
+            } else {
+                document.getElementById('proxyStatsPanel').style.display = 'none';
+            }
             
             // Log proxy status
             if (config.proxyEnabled && config.proxyUrl) {
@@ -1260,6 +1315,72 @@ gate.decodo.com:7000:user-country-in-city-delhi:password"
             api.onSessionEvent((data) => {
                 if (data && data.type === 'ga4_event') {
                     addGA4Event(data.eventType || 'unknown', data.url || '', data.proxied || false);
+                }
+            });
+        }
+
+        // ===== Live Proxy Stats Panel =====
+        let proxyStatsCounters = { total: 0, proxied: 0, direct: 0, scripts: 0, bandwidth: 0 };
+
+        function updateProxyStatsUI(data) {
+            // Accumulate totals across all threads
+            proxyStatsCounters.total += data.totalRequests || 0;
+            proxyStatsCounters.proxied += data.collectProxied || 0;
+            proxyStatsCounters.direct += data.directCount || 0;
+            proxyStatsCounters.scripts += data.scriptsLoadedDirect || 0;
+            proxyStatsCounters.bandwidth += data.bandwidthSaved || 0;
+
+            document.getElementById('proxyTotal').textContent = proxyStatsCounters.total;
+            document.getElementById('proxyProxied').textContent = proxyStatsCounters.proxied;
+            document.getElementById('proxyDirect').textContent = proxyStatsCounters.direct;
+            document.getElementById('proxyScripts').textContent = proxyStatsCounters.scripts;
+
+            // Bandwidth saved display
+            const bwKB = Math.round(proxyStatsCounters.bandwidth / 1024);
+            const bwMB = (proxyStatsCounters.bandwidth / (1024 * 1024)).toFixed(1);
+            document.getElementById('proxyBandwidthText').textContent = bwKB > 1024 ? `${bwMB} MB` : `${bwKB} KB`;
+
+            // Animated progress bar (cap at 100%, scale: 50MB max for full bar)
+            const barPct = Math.min(100, (proxyStatsCounters.bandwidth / (50 * 1024 * 1024)) * 100);
+            document.getElementById('proxyBandwidthBar').style.width = `${barPct}%`;
+
+            document.getElementById('proxyStatsStatus').textContent = `${proxyStatsCounters.proxied} proxied / ${proxyStatsCounters.direct} direct`;
+
+            // Log entry for this proxy event
+            if (data.lastCollectUrl) {
+                const log = document.getElementById('proxyStatsLog');
+                const entry = document.createElement('div');
+                entry.className = 'log-entry';
+                const icon = data.success ? '✅' : '❌';
+                const shortUrl = data.lastCollectUrl.length > 55 ? data.lastCollectUrl.substring(0, 55) + '...' : data.lastCollectUrl;
+                const host = data.proxyHost || 'unknown';
+                entry.innerHTML = `<span style="color:var(--text-muted)">[${new Date().toLocaleTimeString()}]</span> ${icon} <span style="color:#a78bfa">T${data.threadId}</span> via <strong>${host}</strong> → ${shortUrl}`;
+                log.appendChild(entry);
+                log.scrollTop = log.scrollHeight;
+                // Keep only last 10 entries
+                while (log.children.length > 10) log.removeChild(log.firstChild);
+            }
+        }
+
+        function clearProxyStats() {
+            proxyStatsCounters = { total: 0, proxied: 0, direct: 0, scripts: 0, bandwidth: 0 };
+            document.getElementById('proxyTotal').textContent = '0';
+            document.getElementById('proxyProxied').textContent = '0';
+            document.getElementById('proxyDirect').textContent = '0';
+            document.getElementById('proxyScripts').textContent = '0';
+            document.getElementById('proxyBandwidthText').textContent = '0 KB';
+            document.getElementById('proxyBandwidthBar').style.width = '0%';
+            document.getElementById('proxyStatsStatus').textContent = 'Cleared';
+            document.getElementById('proxyStatsLog').innerHTML = '<div class="log-entry log-info" style="opacity:0.5">[Proxy] Cleared. Waiting for events...</div>';
+        }
+
+        // Listen for proxy stats from main process
+        if (api.onProxyStats) {
+            api.onProxyStats((data) => {
+                if (data) {
+                    // Show panel when proxy data arrives
+                    document.getElementById('proxyStatsPanel').style.display = 'block';
+                    updateProxyStatsUI(data);
                 }
             });
         }

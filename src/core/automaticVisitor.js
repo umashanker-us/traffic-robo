@@ -73,6 +73,9 @@ class AutomaticVisitor {
         this.blockStyles = config.blockStyles || false;
         this.blockScripts = config.blockScripts || false;
 
+        // Proxy stats callback — called after each proxied /collect and at visit end
+        this.onProxyStats = config.onProxyStats || null;
+
         this.logger = getLogger(this.threadId);
         this.browser = null;
         this.context = null;
@@ -207,6 +210,8 @@ class AutomaticVisitor {
                     direct: this.proxyRouter.stats.directRequests,
                     scriptsLoadedDirect: this.proxyRouter.stats.scriptsLoadedDirect,
                 });
+                // Final stats emission at visit end
+                this._emitProxyStats('', true);
             }
 
             // Record visit end
@@ -944,9 +949,11 @@ class AutomaticVisitor {
                             body: response.body,
                         });
                         self.replay.logRequest(url, true, true);
+                        self._emitProxyStats(url, true);
                     } catch (e) {
                         self.replay.logError('proxy_collect', e.message);
                         self.logger.debug(`/collect proxy failed, fallback direct: ${e.message}`);
+                        self._emitProxyStats(url, false);
                         await route.continue();
                     }
                     return;
@@ -1002,6 +1009,30 @@ class AutomaticVisitor {
             this.logger.debug(`Replay saved: ${filename}`);
         } catch (error) {
             this.logger.debug(`Failed to save replay: ${error.message}`);
+        }
+    }
+
+    /**
+     * Emit proxy stats to UI via callback
+     * @param {string} lastCollectUrl - Last /collect URL proxied
+     * @param {boolean} success - Whether the proxy call succeeded
+     */
+    _emitProxyStats(lastCollectUrl, success) {
+        if (!this.onProxyStats || !this.proxyRouter) return;
+        try {
+            this.onProxyStats({
+                threadId: this.threadId,
+                proxyHost: this.proxyConfig ? `${this.proxyConfig.host}:${this.proxyConfig.port}` : null,
+                collectProxied: this.proxyRouter.stats.proxiedRequests,
+                directCount: this.proxyRouter.stats.directRequests,
+                totalRequests: this.proxyRouter.stats.totalRequests,
+                scriptsLoadedDirect: this.proxyRouter.stats.scriptsLoadedDirect,
+                bandwidthSaved: this.proxyRouter.stats.directRequests * 150000, // ~150KB avg per direct page load avoided
+                lastCollectUrl: lastCollectUrl || '',
+                success: success
+            });
+        } catch (e) {
+            this.logger.debug(`Proxy stats emit error: ${e.message}`);
         }
     }
 
