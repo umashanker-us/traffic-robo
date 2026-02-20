@@ -402,6 +402,53 @@
         .rdh-stat { text-align: center; padding: 4px; background: var(--bg-input); border-radius: 6px; }
         .rdh-stat .rdh-val { font-size: 16px; font-weight: bold; color: var(--primary); }
         .rdh-stat .rdh-lbl { font-size: 9px; color: var(--text-muted); text-transform: uppercase; }
+
+        /* ===== DASHBOARD ===== */
+        .dash-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; }
+        .dash-grid .card { margin-bottom: 0; }
+        @media (max-width: 1100px) { .dash-grid { grid-template-columns: 1fr 1fr; } }
+        @media (max-width: 700px) { .dash-grid { grid-template-columns: 1fr; } }
+        .dash-grid .card-title { font-size: 12px; margin-bottom: 10px; padding-bottom: 6px; }
+        .dash-full { grid-column: 1 / -1; }
+
+        /* Progress Ring */
+        .ring-wrap { display: flex; align-items: center; gap: 16px; }
+        .ring-box { position: relative; width: 90px; height: 90px; flex-shrink: 0; }
+        .ring-svg { transform: rotate(-90deg); }
+        .ring-bg { fill: none; stroke: var(--bg-input); stroke-width: 8; }
+        .ring-fg { fill: none; stroke: var(--success); stroke-width: 8; stroke-linecap: round; transition: stroke-dashoffset 0.6s ease; }
+        .ring-label { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 20px; font-weight: bold; color: var(--text); }
+        .ring-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; flex: 1; }
+        .ring-stat { text-align: center; padding: 6px; background: var(--bg-input); border-radius: 6px; }
+        .ring-stat .rs-val { font-size: 18px; font-weight: bold; }
+        .ring-stat .rs-lbl { font-size: 9px; color: var(--text-muted); text-transform: uppercase; }
+
+        /* Donut (CSS conic-gradient) */
+        .donut-wrap { display: flex; align-items: center; gap: 16px; }
+        .donut { width: 80px; height: 80px; border-radius: 50%; position: relative; flex-shrink: 0; }
+        .donut::after { content: attr(data-label); position: absolute; inset: 16px; background: var(--bg-card); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 16px; font-weight: bold; color: var(--text); }
+        .donut-legend { font-size: 11px; display: flex; flex-direction: column; gap: 4px; }
+        .donut-legend span { display: flex; align-items: center; gap: 6px; }
+        .dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+
+        /* Horizontal stacked bar */
+        .hbar-track { height: 22px; background: var(--bg-input); border-radius: 6px; overflow: hidden; display: flex; margin-bottom: 6px; }
+        .hbar-seg { height: 100%; transition: width 0.5s ease; display: flex; align-items: center; justify-content: center; font-size: 9px; font-weight: 600; color: #fff; min-width: 0; overflow: hidden; white-space: nowrap; }
+        .hbar-labels { display: flex; flex-wrap: wrap; gap: 8px; font-size: 10px; color: var(--text-muted); }
+        .hbar-labels span { display: flex; align-items: center; gap: 4px; }
+
+        /* City list */
+        .city-list { font-size: 11px; }
+        .city-row { display: flex; justify-content: space-between; align-items: center; padding: 3px 0; border-bottom: 1px solid rgba(74,74,94,0.2); }
+        .city-row:last-child { border-bottom: none; }
+        .city-bar-bg { flex: 1; height: 6px; background: var(--bg-input); border-radius: 3px; margin: 0 8px; }
+        .city-bar-fg { height: 100%; background: #a78bfa; border-radius: 3px; transition: width 0.4s; }
+
+        /* Error list */
+        .err-list { font-size: 11px; max-height: 120px; overflow-y: auto; }
+        .err-item { padding: 4px 0; border-bottom: 1px solid rgba(74,74,94,0.2); color: var(--danger); }
+        .err-item:last-child { border-bottom: none; }
+        .err-ctx { color: var(--text-muted); font-size: 10px; }
     </style>
 </head>
 <body>
@@ -469,6 +516,7 @@
     <div class="tab-nav">
         <button class="tab-btn active" onclick="switchTab('campaign')">📌 Campaign</button>
         <button class="tab-btn" onclick="switchTab('advanced')">⚙️ Advanced</button>
+        <button class="tab-btn" onclick="switchTab('dashboard')">📈 Dashboard</button>
         <button class="tab-btn" onclick="switchTab('monitor')">📊 Monitor <span class="tab-badge" id="monitorBadge" style="display:none">0</span></button>
     </div>
 
@@ -785,7 +833,95 @@ gate.decodo.com:7000:user-country-in-city-delhi:password"
             </div>
         </div>
 
-        <!-- ========== TAB 3: MONITOR ========== -->
+        <!-- ========== TAB 3: DASHBOARD ========== -->
+        <div class="tab-pane" id="tab-dashboard">
+            <div class="dash-grid">
+                <!-- Visit Progress -->
+                <div class="card">
+                    <div class="card-title">Visit Progress</div>
+                    <div class="ring-wrap">
+                        <div class="ring-box">
+                            <svg class="ring-svg" width="90" height="90" viewBox="0 0 90 90">
+                                <circle class="ring-bg" cx="45" cy="45" r="36"/>
+                                <circle class="ring-fg" id="dashRingFg" cx="45" cy="45" r="36" stroke-dasharray="226.2" stroke-dashoffset="226.2"/>
+                            </svg>
+                            <div class="ring-label" id="dashRingPct">0%</div>
+                        </div>
+                        <div class="ring-stats">
+                            <div class="ring-stat"><div class="rs-val" style="color:var(--success)" id="dashCompleted">0</div><div class="rs-lbl">Completed</div></div>
+                            <div class="ring-stat"><div class="rs-val" style="color:var(--danger)" id="dashFailed">0</div><div class="rs-lbl">Failed</div></div>
+                            <div class="ring-stat"><div class="rs-val" style="color:var(--warning)" id="dashActive">0</div><div class="rs-lbl">Active</div></div>
+                            <div class="ring-stat"><div class="rs-val" style="color:var(--primary)" id="dashVPM">0</div><div class="rs-lbl">Visits/min</div></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- GA4 Detection -->
+                <div class="card">
+                    <div class="card-title">GA4 Detection Rate</div>
+                    <div class="donut-wrap">
+                        <div class="donut" id="dashGA4Donut" data-label="-%"
+                             style="background:conic-gradient(var(--success) 0% 0%, var(--danger) 0% 0%, var(--bg-input) 0% 100%);">
+                        </div>
+                        <div class="donut-legend">
+                            <span><span class="dot" style="background:var(--success)"></span> Detected: <strong id="dashGA4Det">0</strong></span>
+                            <span><span class="dot" style="background:var(--danger)"></span> Not Detected: <strong id="dashGA4No">0</strong></span>
+                            <span><span class="dot" style="background:var(--warning)"></span> Errors: <strong id="dashGA4Err">0</strong></span>
+                            <span style="color:var(--text-muted);font-size:10px;margin-top:2px;">Total GA4 Events: <strong id="dashGA4Total" style="color:var(--primary)">0</strong></span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Device Split -->
+                <div class="card">
+                    <div class="card-title">Device Split</div>
+                    <div class="donut-wrap">
+                        <div class="donut" id="dashDeviceDonut" data-label="-"
+                             style="background:conic-gradient(#60a5fa 0% 0%, #f472b6 0% 0%, var(--bg-input) 0% 100%);">
+                        </div>
+                        <div class="donut-legend">
+                            <span><span class="dot" style="background:#60a5fa"></span> Desktop: <strong id="dashDesktop">0</strong></span>
+                            <span><span class="dot" style="background:#f472b6"></span> Mobile: <strong id="dashMobile">0</strong></span>
+                            <span style="color:var(--text-muted);font-size:10px;margin-top:2px;">Actual ratio from user agents</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Visit Distribution (full width) -->
+                <div class="card dash-full">
+                    <div class="card-title">Visit Distribution (Pages per Session)</div>
+                    <div style="margin-bottom:4px;font-size:10px;color:var(--text-muted);">Actual</div>
+                    <div class="hbar-track" id="dashPageBar"></div>
+                    <div class="hbar-labels" id="dashPageLabels"></div>
+                </div>
+
+                <!-- Proxy Health -->
+                <div class="card">
+                    <div class="card-title">Proxy Health</div>
+                    <div class="hbar-track" id="dashProxyBar" style="height:18px;margin-bottom:8px;"></div>
+                    <div class="hbar-labels" id="dashProxyLabels" style="margin-bottom:10px;"></div>
+                    <div style="font-size:11px;font-weight:600;color:var(--text-muted);margin-bottom:4px;">Top Proxy Cities</div>
+                    <div class="city-list" id="dashCityList">
+                        <div style="color:var(--text-muted);font-size:11px;padding:8px 0;text-align:center;">No proxy data yet</div>
+                    </div>
+                </div>
+
+                <!-- Error Rate -->
+                <div class="card" style="grid-column: span 2;">
+                    <div class="card-title" style="display:flex;justify-content:space-between;align-items:center;">
+                        Error Rate
+                        <span style="font-size:11px;color:var(--text-muted);" id="dashErrRate">0 errors (0%)</span>
+                    </div>
+                    <div class="hbar-track" id="dashErrBar" style="height:14px;margin-bottom:10px;"></div>
+                    <div style="font-size:11px;font-weight:600;color:var(--text-muted);margin-bottom:4px;">Recent Errors</div>
+                    <div class="err-list" id="dashErrList">
+                        <div style="color:var(--text-muted);font-size:11px;padding:8px 0;text-align:center;">No errors</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ========== TAB 4: MONITOR ========== -->
         <div class="tab-pane" id="tab-monitor">
             <div class="monitor-grid">
                 <!-- Activity Log -->
@@ -1138,6 +1274,10 @@ gate.decodo.com:7000:user-country-in-city-delhi:password"
             updateUI(true);
             addLog('info', `Starting traffic simulation with ${totalVisits} visits...`);
 
+            // Reset and start dashboard
+            dashReset();
+            dashStartInterval();
+
             // Clear GA4 event monitor on new simulation
             clearGA4Events();
 
@@ -1161,13 +1301,15 @@ gate.decodo.com:7000:user-country-in-city-delhi:password"
             }
 
             const result = await api.startTraffic(config);
-            
+
+            dashStopInterval();
+
             if (result.success) {
                 addLog('info', 'Traffic simulation completed successfully!');
             } else {
                 addLog('error', `Error: ${result.error}`);
             }
-            
+
             updateUI(false);
         }
 
@@ -1176,14 +1318,15 @@ gate.decodo.com:7000:user-country-in-city-delhi:password"
             addLog('warning', '🛑 Stopping traffic - Terminating all sessions...');
             document.getElementById('stopBtn').disabled = true;
             document.getElementById('stopBtn').textContent = '⏳ Stopping...';
-            
+
             try {
                 await api.stopTraffic();
                 addLog('info', '✅ All sessions terminated');
             } catch (error) {
                 addLog('error', 'Error stopping: ' + error.message);
             }
-            
+
+            dashStopInterval();
             document.getElementById('stopBtn').textContent = '⏹️ STOP';
             updateUI(false);
         }
@@ -1323,6 +1466,7 @@ gate.decodo.com:7000:user-country-in-city-delhi:password"
         api.onVisitStarted(() => {
             const active = parseInt(document.getElementById('activeThreads').textContent) + 1;
             document.getElementById('activeThreads').textContent = active;
+            dashOnVisitStarted();
         });
 
         api.onVisitCompleted((count) => {
@@ -1422,6 +1566,7 @@ gate.decodo.com:7000:user-country-in-city-delhi:password"
                 if (data && data.type === 'ga4_event') {
                     addGA4Event(data.eventType || 'unknown', data.url || '', data.proxied || false);
                 }
+                dashOnGA4Event(data);
             });
         }
 
@@ -1487,6 +1632,7 @@ gate.decodo.com:7000:user-country-in-city-delhi:password"
                     // Show panel when proxy data arrives
                     document.getElementById('proxyStatsPanel').style.display = 'block';
                     updateProxyStatsUI(data);
+                    dashOnProxyStats(data);
                 }
             });
         }
@@ -1632,6 +1778,26 @@ gate.decodo.com:7000:user-country-in-city-delhi:password"
                 if (document.getElementById('replayAutoRefresh').checked) {
                     refreshReplayList();
                 }
+                // Dashboard: fetch replay details for this visit
+                api.getSessionReplay(threadId).then(replay => {
+                    if (replay) {
+                        dashOnVisitCompleted({
+                            pages: replay.stats.pagesVisited,
+                            ga4Detected: replay.stats.ga4EventsDetected,
+                            isBounce: replay.stats.isBounce,
+                            errors: replay.stats.errors,
+                        });
+                        if (replay.sessionInfo && replay.sessionInfo.userAgent) {
+                            dashOnUA(replay.sessionInfo.userAgent);
+                        }
+                        // Track errors from timeline
+                        if (replay.timeline) {
+                            replay.timeline.filter(e => e.type === 'error').forEach(e => {
+                                dashOnError(e.message, e.context);
+                            });
+                        }
+                    }
+                });
             });
         }
 
@@ -1675,6 +1841,235 @@ gate.decodo.com:7000:user-country-in-city-delhi:password"
                     }, 500);
                 }
             });
+        }
+
+        // ===== DASHBOARD =====
+        const dash = {
+            completed: 0, failed: 0, active: 0, startTime: 0,
+            ga4Detected: 0, ga4NotDetected: 0, ga4Errors: 0, ga4Total: 0,
+            desktop: 0, mobile: 0,
+            pages: { 1: 0, 2: 0, 3: 0, 4: 0, '5+': 0 },
+            proxyProxied: 0, proxyDirect: 0,
+            proxyCities: {},
+            errors: [],
+            bounces: 0,
+            _interval: null,
+        };
+
+        function dashReset() {
+            Object.assign(dash, {
+                completed: 0, failed: 0, active: 0, startTime: Date.now(),
+                ga4Detected: 0, ga4NotDetected: 0, ga4Errors: 0, ga4Total: 0,
+                desktop: 0, mobile: 0,
+                pages: { 1: 0, 2: 0, 3: 0, 4: 0, '5+': 0 },
+                proxyProxied: 0, proxyDirect: 0,
+                proxyCities: {},
+                errors: [],
+                bounces: 0,
+            });
+            dashRender();
+        }
+
+        function dashOnVisitStarted() {
+            dash.active++;
+        }
+
+        function dashOnVisitCompleted(replayItem) {
+            dash.completed++;
+            if (dash.active > 0) dash.active--;
+
+            // Aggregate from replay list item
+            if (replayItem) {
+                if (replayItem.errors > 0) dash.failed++;
+                if (replayItem.ga4Detected) dash.ga4Detected++;
+                else if (replayItem.errors > 0) dash.ga4Errors++;
+                else dash.ga4NotDetected++;
+
+                const pg = replayItem.pages || 1;
+                if (pg >= 5) dash.pages['5+']++;
+                else dash.pages[pg] = (dash.pages[pg] || 0) + 1;
+
+                if (replayItem.isBounce) dash.bounces++;
+            }
+        }
+
+        function dashOnGA4Event(data) {
+            if (data && data.type === 'ga4_event') {
+                dash.ga4Total++;
+            }
+        }
+
+        function dashOnProxyStats(data) {
+            if (!data) return;
+            dash.proxyProxied += data.collectProxied || 0;
+            dash.proxyDirect += data.directCount || 0;
+
+            // Track cities from proxy host
+            const host = data.proxyHost || '';
+            const cityMatch = host.match(/city[_-]([a-zA-Z_]+)/i);
+            if (cityMatch) {
+                const city = cityMatch[1].replace(/_/g, ' ');
+                dash.proxyCities[city] = (dash.proxyCities[city] || 0) + (data.collectProxied || 0);
+            }
+        }
+
+        function dashOnUA(ua) {
+            if (!ua) return;
+            if (/Mobile|Android|iPhone|iPad/i.test(ua)) dash.mobile++;
+            else dash.desktop++;
+        }
+
+        function dashOnError(msg, ctx) {
+            dash.errors.unshift({ msg: (msg || '').substring(0, 80), ctx: ctx || '', time: new Date().toLocaleTimeString() });
+            if (dash.errors.length > 20) dash.errors.length = 20;
+        }
+
+        // Render dashboard charts
+        function dashRender() {
+            const total = dash.completed + dash.failed;
+            const target = totalVisits || 1;
+            const pct = Math.min(100, Math.round((total / target) * 100));
+
+            // Ring
+            const circ = 226.2;
+            const offset = circ - (circ * pct / 100);
+            const ring = document.getElementById('dashRingFg');
+            if (ring) {
+                ring.style.strokeDashoffset = offset;
+                ring.style.stroke = pct >= 100 ? 'var(--success)' : 'var(--primary)';
+            }
+            const ringPct = document.getElementById('dashRingPct');
+            if (ringPct) ringPct.textContent = pct + '%';
+
+            document.getElementById('dashCompleted').textContent = dash.completed;
+            document.getElementById('dashFailed').textContent = dash.failed;
+            document.getElementById('dashActive').textContent = dash.active;
+
+            // VPM
+            const elapsed = (Date.now() - (dash.startTime || Date.now())) / 60000;
+            const vpm = elapsed > 0.1 ? (total / elapsed).toFixed(1) : '0';
+            document.getElementById('dashVPM').textContent = vpm;
+
+            // GA4 Donut
+            const ga4T = dash.ga4Detected + dash.ga4NotDetected + dash.ga4Errors;
+            const ga4DetPct = ga4T > 0 ? (dash.ga4Detected / ga4T * 100) : 0;
+            const ga4NoPct = ga4T > 0 ? (dash.ga4NotDetected / ga4T * 100) : 0;
+            const ga4ErrPct = ga4T > 0 ? (dash.ga4Errors / ga4T * 100) : 0;
+            const ga4Donut = document.getElementById('dashGA4Donut');
+            if (ga4Donut) {
+                const p1 = ga4DetPct;
+                const p2 = p1 + ga4NoPct;
+                ga4Donut.style.background = ga4T > 0
+                    ? `conic-gradient(var(--success) 0% ${p1}%, var(--danger) ${p1}% ${p2}%, var(--warning) ${p2}% ${p2 + ga4ErrPct}%, var(--bg-input) ${p2 + ga4ErrPct}% 100%)`
+                    : `conic-gradient(var(--bg-input) 0% 100%)`;
+                ga4Donut.setAttribute('data-label', ga4T > 0 ? Math.round(ga4DetPct) + '%' : '-%');
+            }
+            document.getElementById('dashGA4Det').textContent = dash.ga4Detected;
+            document.getElementById('dashGA4No').textContent = dash.ga4NotDetected;
+            document.getElementById('dashGA4Err').textContent = dash.ga4Errors;
+            document.getElementById('dashGA4Total').textContent = dash.ga4Total;
+
+            // Device Donut
+            const devT = dash.desktop + dash.mobile;
+            const deskPct = devT > 0 ? (dash.desktop / devT * 100) : 0;
+            const mobPct = devT > 0 ? (dash.mobile / devT * 100) : 0;
+            const devDonut = document.getElementById('dashDeviceDonut');
+            if (devDonut) {
+                devDonut.style.background = devT > 0
+                    ? `conic-gradient(#60a5fa 0% ${deskPct}%, #f472b6 ${deskPct}% 100%)`
+                    : `conic-gradient(var(--bg-input) 0% 100%)`;
+                devDonut.setAttribute('data-label', devT > 0 ? Math.round(deskPct) + '%' : '-');
+            }
+            document.getElementById('dashDesktop').textContent = dash.desktop;
+            document.getElementById('dashMobile').textContent = dash.mobile;
+
+            // Page Distribution Bar
+            const pgColors = { 1: '#ef4444', 2: '#f59e0b', 3: '#22c55e', 4: '#60a5fa', '5+': '#a78bfa' };
+            const pgTotal = Object.values(dash.pages).reduce((a, b) => a + b, 0) || 1;
+            const pgBar = document.getElementById('dashPageBar');
+            const pgLabels = document.getElementById('dashPageLabels');
+            if (pgBar) {
+                pgBar.innerHTML = '';
+                for (const [k, v] of Object.entries(dash.pages)) {
+                    const w = (v / pgTotal * 100);
+                    if (w > 0) {
+                        const seg = document.createElement('div');
+                        seg.className = 'hbar-seg';
+                        seg.style.width = w + '%';
+                        seg.style.background = pgColors[k];
+                        seg.textContent = w > 8 ? v : '';
+                        pgBar.appendChild(seg);
+                    }
+                }
+            }
+            if (pgLabels) {
+                pgLabels.innerHTML = '';
+                for (const [k, v] of Object.entries(dash.pages)) {
+                    pgLabels.innerHTML += `<span><span class="dot" style="background:${pgColors[k]}"></span>${k}pg: ${v}</span>`;
+                }
+            }
+
+            // Proxy Bar
+            const pxTotal = dash.proxyProxied + dash.proxyDirect;
+            const pxBar = document.getElementById('dashProxyBar');
+            const pxLabels = document.getElementById('dashProxyLabels');
+            if (pxBar) {
+                if (pxTotal > 0) {
+                    const pxPct = (dash.proxyProxied / pxTotal * 100);
+                    pxBar.innerHTML = `<div class="hbar-seg" style="width:${pxPct}%;background:#a78bfa;">${pxPct > 8 ? dash.proxyProxied : ''}</div>`
+                        + `<div class="hbar-seg" style="width:${100 - pxPct}%;background:var(--success);">${(100 - pxPct) > 8 ? dash.proxyDirect : ''}</div>`;
+                } else {
+                    pxBar.innerHTML = '';
+                }
+            }
+            if (pxLabels) {
+                pxLabels.innerHTML = `<span><span class="dot" style="background:#a78bfa"></span>Proxied: ${dash.proxyProxied}</span>`
+                    + `<span><span class="dot" style="background:var(--success)"></span>Direct: ${dash.proxyDirect}</span>`;
+            }
+
+            // City list
+            const cityEl = document.getElementById('dashCityList');
+            if (cityEl) {
+                const cities = Object.entries(dash.proxyCities).sort((a, b) => b[1] - a[1]).slice(0, 5);
+                if (cities.length > 0) {
+                    const maxC = cities[0][1];
+                    cityEl.innerHTML = cities.map(([c, n]) =>
+                        `<div class="city-row"><span>${c}</span><div class="city-bar-bg"><div class="city-bar-fg" style="width:${n / maxC * 100}%"></div></div><span style="font-weight:600;">${n}</span></div>`
+                    ).join('');
+                } else {
+                    cityEl.innerHTML = '<div style="color:var(--text-muted);font-size:11px;padding:8px 0;text-align:center;">No proxy data yet</div>';
+                }
+            }
+
+            // Error Rate
+            const errPct = total > 0 ? (dash.failed / total * 100).toFixed(1) : 0;
+            document.getElementById('dashErrRate').textContent = `${dash.failed} errors (${errPct}%)`;
+            const errBar = document.getElementById('dashErrBar');
+            if (errBar) {
+                const okPct = total > 0 ? ((total - dash.failed) / total * 100) : 100;
+                errBar.innerHTML = `<div class="hbar-seg" style="width:${okPct}%;background:var(--success);"></div>`
+                    + `<div class="hbar-seg" style="width:${100 - okPct}%;background:var(--danger);"></div>`;
+            }
+            const errList = document.getElementById('dashErrList');
+            if (errList) {
+                if (dash.errors.length > 0) {
+                    errList.innerHTML = dash.errors.slice(0, 5).map(e =>
+                        `<div class="err-item">${e.msg} <span class="err-ctx">[${e.ctx}] ${e.time}</span></div>`
+                    ).join('');
+                } else {
+                    errList.innerHTML = '<div style="color:var(--text-muted);font-size:11px;padding:8px 0;text-align:center;">No errors</div>';
+                }
+            }
+        }
+
+        function dashStartInterval() {
+            if (dash._interval) clearInterval(dash._interval);
+            dash._interval = setInterval(dashRender, 2000);
+        }
+
+        function dashStopInterval() {
+            if (dash._interval) { clearInterval(dash._interval); dash._interval = null; }
+            dashRender(); // Final render
         }
     </script>
 </body>
