@@ -1,0 +1,1268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GA4 Traffic Robo v2.4</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        :root {
+            --primary: #4f46e5;
+            --primary-dark: #4338ca;
+            --success: #22c55e;
+            --danger: #ef4444;
+            --warning: #f59e0b;
+            --bg-dark: #1e1e2e;
+            --bg-card: #2d2d3f;
+            --bg-input: #3d3d52;
+            --text: #e2e8f0;
+            --text-muted: #94a3b8;
+            --border: #4a4a5e;
+        }
+
+        [data-theme="light"] {
+            --primary: #4f46e5;
+            --primary-dark: #3730a3;
+            --success: #16a34a;
+            --danger: #dc2626;
+            --warning: #d97706;
+            --bg-dark: #f1f5f9;
+            --bg-card: #ffffff;
+            --bg-input: #e2e8f0;
+            --text: #1e293b;
+            --text-muted: #64748b;
+            --border: #cbd5e1;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: var(--bg-dark);
+            color: var(--text);
+            height: 100vh;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* ===== COMPACT HEADER ===== */
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 20px;
+            background: var(--bg-card);
+            border-bottom: 1px solid var(--border);
+            flex-shrink: 0;
+        }
+
+        .header h1 {
+            font-size: 18px;
+            color: var(--primary);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+
+        .header-stats {
+            display: flex;
+            gap: 20px;
+        }
+
+        .stat { text-align: center; }
+        .stat-value { font-size: 22px; font-weight: bold; color: var(--success); }
+        .stat-label { font-size: 10px; color: var(--text-muted); text-transform: uppercase; }
+
+        .header-actions {
+            display: flex;
+            gap: 6px;
+        }
+
+        .header-actions button {
+            padding: 5px 10px;
+            background: transparent;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text-muted);
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .header-actions button:hover {
+            background: var(--bg-input);
+            color: var(--text);
+        }
+
+        /* ===== METRICS BAR (always visible, compact) ===== */
+        .metrics-bar {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 8px 20px;
+            background: linear-gradient(135deg, var(--primary) 0%, #7c3aed 100%);
+            color: white;
+            flex-shrink: 0;
+        }
+
+        .metrics-bar .metric-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            flex: 1;
+        }
+
+        .metrics-bar .metric-item label {
+            color: rgba(255,255,255,0.75);
+            font-size: 11px;
+            margin: 0;
+            white-space: nowrap;
+            text-transform: uppercase;
+        }
+
+        .metrics-bar .metric-item input {
+            background: rgba(255,255,255,0.2);
+            border: 1px solid rgba(255,255,255,0.3);
+            color: white;
+            text-align: center;
+            font-size: 15px;
+            font-weight: bold;
+            padding: 4px 8px;
+            border-radius: 6px;
+            width: 70px;
+        }
+
+        .metrics-bar .action-btns {
+            display: flex;
+            gap: 8px;
+            margin-left: auto;
+            flex-shrink: 0;
+        }
+
+        /* ===== ACTION BUTTONS (in metrics bar) ===== */
+        .btn {
+            padding: 8px 20px;
+            border: none;
+            border-radius: 8px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .btn-primary { background: rgba(255,255,255,0.25); color: white; border: 1px solid rgba(255,255,255,0.4); }
+        .btn-primary:hover:not(:disabled) { background: rgba(255,255,255,0.35); }
+        .btn-danger { background: var(--danger); color: white; }
+        .btn-danger:hover:not(:disabled) { background: #dc2626; }
+        .btn-secondary { background: var(--bg-input); color: var(--text); border: 1px solid var(--border); }
+        .btn-secondary:hover:not(:disabled) { background: var(--border); }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        /* ===== STATUS BAR ===== */
+        .status-bar {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 6px 20px;
+            background: var(--bg-card);
+            border-bottom: 1px solid var(--border);
+            flex-shrink: 0;
+            font-size: 13px;
+        }
+
+        .status-indicator { width: 10px; height: 10px; border-radius: 50%; background: var(--text-muted); flex-shrink: 0; }
+        .status-indicator.running { background: var(--success); animation: pulse 1.5s infinite; }
+        .status-indicator.stopped { background: var(--danger); }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+        .status-text { color: var(--text-muted); white-space: nowrap; }
+        .progress-bar { flex: 1; height: 6px; background: var(--bg-input); border-radius: 3px; overflow: hidden; }
+        .progress-fill { height: 100%; background: linear-gradient(90deg, var(--primary), var(--success)); border-radius: 3px; transition: width 0.3s; }
+
+        /* ===== TAB NAVIGATION ===== */
+        .tab-nav {
+            display: flex;
+            gap: 0;
+            background: var(--bg-card);
+            border-bottom: 2px solid var(--border);
+            flex-shrink: 0;
+            padding: 0 20px;
+        }
+
+        .tab-btn {
+            padding: 10px 24px;
+            background: transparent;
+            border: none;
+            border-bottom: 3px solid transparent;
+            color: var(--text-muted);
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            position: relative;
+            top: 2px;
+        }
+
+        .tab-btn:hover { color: var(--text); background: var(--bg-input); }
+        .tab-btn.active { color: var(--primary); border-bottom-color: var(--primary); background: transparent; }
+
+        .tab-badge {
+            display: inline-block;
+            background: var(--danger);
+            color: white;
+            font-size: 10px;
+            padding: 1px 6px;
+            border-radius: 10px;
+            margin-left: 6px;
+            font-weight: bold;
+        }
+
+        /* ===== TAB CONTENT ===== */
+        .tab-content {
+            flex: 1;
+            overflow-y: auto;
+            padding: 16px 20px;
+        }
+
+        .tab-pane { display: none; }
+        .tab-pane.active { display: block; }
+
+        /* ===== CARDS ===== */
+        .card {
+            background: var(--bg-card);
+            border-radius: 10px;
+            padding: 16px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.15);
+            margin-bottom: 14px;
+        }
+
+        .card-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--primary);
+            margin-bottom: 12px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        /* ===== FORM ELEMENTS ===== */
+        .form-group { margin-bottom: 12px; }
+
+        .form-row {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+            gap: 12px;
+        }
+
+        label {
+            display: block;
+            font-size: 11px;
+            color: var(--text-muted);
+            margin-bottom: 4px;
+            text-transform: uppercase;
+        }
+
+        input[type="text"], input[type="number"], input[type="password"], select, textarea {
+            width: 100%;
+            padding: 8px 10px;
+            background: var(--bg-input);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text);
+            font-size: 13px;
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+
+        input:focus, select:focus, textarea:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.2);
+        }
+
+        textarea { resize: vertical; min-height: 80px; font-family: 'Consolas', monospace; }
+        .large-textarea { min-height: 120px; }
+
+        .checkbox-group { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
+        input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--primary); cursor: pointer; }
+        .checkbox-label { font-size: 13px; color: var(--text); cursor: pointer; }
+
+        /* ===== TWO-COLUMN LAYOUT inside tab ===== */
+        .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+        @media (max-width: 900px) { .two-col { grid-template-columns: 1fr; } }
+
+        /* ===== INFO BOX ===== */
+        .info-box { background: rgba(79, 70, 229, 0.1); border-radius: 6px; padding: 10px; margin-bottom: 12px; font-size: 12px; }
+        .info-box.warning { background: rgba(245, 158, 11, 0.1); border-left: 3px solid var(--warning); }
+
+        /* ===== LOG OUTPUT ===== */
+        .log-output {
+            background: #1a1a2e;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 8px;
+            font-family: 'Consolas', monospace;
+            font-size: 11px;
+            max-height: 200px;
+            overflow-y: auto;
+            color: #10b981;
+        }
+        .log-output .log-entry { margin-bottom: 2px; }
+        .log-output .log-error { color: var(--danger); }
+        .log-output .log-info { color: #60a5fa; }
+        .log-output .log-warn { color: var(--warning); }
+
+        /* ===== EXTENSION INFO ===== */
+        .extension-info { display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: rgba(34, 197, 94, 0.1); border-radius: 6px; margin-top: 8px; }
+        .extension-info.not-loaded { background: rgba(148, 163, 184, 0.1); }
+
+        /* ===== TOOLTIP ===== */
+        .tooltip { position: relative; display: inline-block; }
+        .tooltip-text { visibility: hidden; background: #333; color: white; padding: 5px 10px; border-radius: 4px; font-size: 12px; position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%); white-space: nowrap; z-index: 100; }
+        .tooltip:hover .tooltip-text { visibility: visible; }
+
+        /* ===== MONITOR GRID ===== */
+        .monitor-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; height: 100%; }
+        .monitor-grid .card { margin-bottom: 0; display: flex; flex-direction: column; }
+        .monitor-grid .log-output { flex: 1; max-height: none; }
+        @media (max-width: 900px) { .monitor-grid { grid-template-columns: 1fr; } }
+
+        /* ===== COMMAND SECTION ===== */
+        .command-section { grid-column: 1 / -1; }
+
+        /* ===== SCROLLBAR ===== */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: var(--bg-dark); }
+        ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+    </style>
+</head>
+<body>
+    <!-- ===== HEADER ===== -->
+    <div class="header">
+        <h1>
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/>
+            </svg>
+            GA4 Traffic Robo v2.4
+            <button id="themeToggle" onclick="toggleTheme()" style="background:none;border:1px solid var(--border);border-radius:6px;cursor:pointer;padding:2px 8px;margin-left:8px;color:var(--text-muted);font-size:14px;" title="Toggle Theme">🌙</button>
+        </h1>
+        <div class="header-right">
+            <div class="header-stats">
+                <div class="stat">
+                    <div class="stat-value" id="visitCount">0</div>
+                    <div class="stat-label">Completed</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value" id="activeThreads">0</div>
+                    <div class="stat-label">Active</div>
+                </div>
+            </div>
+            <div class="header-actions">
+                <button onclick="loadConfig()">📂 Open</button>
+                <button onclick="saveConfig()">💾 Save</button>
+                <button onclick="resetForm()">🔄 Reset</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ===== METRICS + ACTION BUTTONS (always visible) ===== -->
+    <div class="metrics-bar">
+        <div class="metric-item">
+            <label>Session Duration</label>
+            <input type="number" id="avgSessionDuration" value="60" min="0" max="600">
+        </div>
+        <div class="metric-item">
+            <label>Bounce Rate %</label>
+            <input type="number" id="bounceRate" value="30" min="1" max="90">
+        </div>
+        <div class="metric-item">
+            <label>Pages/Session</label>
+            <input type="number" id="pagePerSession" value="3" min="1" max="20" step="0.1">
+        </div>
+        <div class="action-btns">
+            <button class="btn btn-primary" id="startBtn" onclick="startTraffic()">▶️ START</button>
+            <button class="btn btn-danger" id="stopBtn" onclick="stopTraffic()" disabled>⏹️ STOP</button>
+        </div>
+    </div>
+
+    <!-- ===== STATUS BAR ===== -->
+    <div class="status-bar">
+        <div class="status-indicator" id="statusIndicator"></div>
+        <span class="status-text" id="statusText">Ready to start</span>
+        <div class="progress-bar">
+            <div class="progress-fill" id="progressFill" style="width: 0%"></div>
+        </div>
+        <span id="progressText" style="font-size:12px;color:var(--text-muted);">0%</span>
+    </div>
+
+    <!-- ===== TAB NAVIGATION ===== -->
+    <div class="tab-nav">
+        <button class="tab-btn active" onclick="switchTab('campaign')">📌 Campaign</button>
+        <button class="tab-btn" onclick="switchTab('advanced')">⚙️ Advanced</button>
+        <button class="tab-btn" onclick="switchTab('monitor')">📊 Monitor <span class="tab-badge" id="monitorBadge" style="display:none">0</span></button>
+    </div>
+
+    <!-- ===== TAB CONTENT ===== -->
+    <div class="tab-content">
+
+        <!-- ========== TAB 1: CAMPAIGN ========== -->
+        <div class="tab-pane active" id="tab-campaign">
+            <div class="two-col">
+                <!-- Left: Campaign Settings -->
+                <div class="card">
+                    <div class="card-title">📌 Campaign Settings</div>
+
+                    <div class="form-group">
+                        <label>Campaign Name</label>
+                        <input type="text" id="campaignName" placeholder="My Campaign">
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Total Visits</label>
+                            <input type="number" id="repeat" value="100" min="1">
+                        </div>
+                        <div class="form-group">
+                            <label>Threads</label>
+                            <select id="threads">
+                                <option value="1">1</option>
+                                <option value="2">2</option>
+                                <option value="3">3</option>
+                                <option value="5" selected>5</option>
+                                <option value="10">10</option>
+                                <option value="15">15</option>
+                                <option value="20">20</option>
+                                <option value="30">30</option>
+                                <option value="50">50</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Thread Delay (sec)</label>
+                            <input type="number" id="threadDelay" value="1" min="0">
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Campaign URLs (one per line)</label>
+                        <textarea id="campaignLinks" class="large-textarea" placeholder="https://example.com?utm_source=google&utm_medium=cpc"></textarea>
+                    </div>
+
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="isReferer">
+                        <label class="checkbox-label" for="isReferer">Use Referer Source</label>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Referer URLs (one per line)</label>
+                        <textarea id="refererLinks" placeholder="https://google.com&#10;https://facebook.com"></textarea>
+                    </div>
+                </div>
+
+                <!-- Right: Browser & Behavior -->
+                <div class="card">
+                    <div class="card-title">🌐 Browser & Behavior Settings</div>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Device Type</label>
+                            <select id="userAgentType">
+                                <option value="Default">Default (Mixed)</option>
+                                <option value="Desktop">Desktop Only</option>
+                                <option value="Mobile">Mobile Only</option>
+                                <option value="Desktop & Mobile">Desktop & Mobile</option>
+                                <option value="Chrome">Chrome</option>
+                                <option value="Firefox">Firefox</option>
+                                <option value="Android">Android</option>
+                                <option value="iPhone">iPhone</option>
+                                <option value="Windows">Windows</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Location</label>
+                            <select id="location">
+                                <option value="India">India</option>
+                                <option value="Gujarat">Gujarat</option>
+                                <option value="Delhi">Delhi</option>
+                                <option value="Mumbai">Mumbai</option>
+                                <option value="Bangalore">Bangalore</option>
+                                <option value="Chennai">Chennai</option>
+                                <option value="Kolkata">Kolkata</option>
+                                <option value="Hyderabad">Hyderabad</option>
+                                <option value="USA">USA</option>
+                                <option value="UK">UK</option>
+                                <option value="Random">Random</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Play Mode</label>
+                            <select id="playMode">
+                                <option value="Fastest">Fastest (Headless, 2-4s)</option>
+                                <option value="Fast">Fast (Headless, 3-6s)</option>
+                                <option value="Slow" selected>Slow (Visible, 4-8s)</option>
+                                <option value="Slower">Slower (Human, 5-12s)</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Command Mode</label>
+                            <select id="commandMode" onchange="toggleCommandArea()">
+                                <option value="Automatic">Automatic</option>
+                                <option value="Manual">Manual</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Returning Users (%)</label>
+                            <input type="number" id="percOldUsers" value="0" min="0" max="100">
+                        </div>
+                        <div class="form-group">
+                            <label>Memory Clear (0=Off)</label>
+                            <input type="number" id="memClear" value="0" min="0">
+                        </div>
+                    </div>
+
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="restrictToPrimaryDomain" checked>
+                        <label class="checkbox-label" for="restrictToPrimaryDomain">Restrict to Same Domain</label>
+                    </div>
+
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="adsBlock">
+                        <label class="checkbox-label" for="adsBlock">Block Ads</label>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Previous Visit URL (for Tracking URLs without UTM)</label>
+                        <input type="text" id="previousURL" placeholder="https://example.com/page">
+                    </div>
+
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="useBaseUrlForOldUser">
+                        <label class="checkbox-label" for="useBaseUrlForOldUser">Auto-extract Base URL (for UTM Links)</label>
+                    </div>
+
+                    <div class="info-box" style="background: rgba(59, 130, 246, 0.1); border-left: 3px solid #3b82f6;">
+                        <strong>📝 Returning Users:</strong> First visit creates cookie → Second visit with UTM = GA4 "Returning User"<br>
+                        <small style="color:var(--text-muted);">All NEW = 0% | UTM Link = check "Auto-extract" | Tracking URL = enter Previous URL</small>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Manual Commands (only visible when Manual mode selected) -->
+            <div class="card command-section" id="commandSection" style="display: none;">
+                <div class="card-title">⚡ Manual Commands</div>
+                <div class="form-group">
+                    <label>Commands (one per line) - Format: action:selectorType:selector:value</label>
+                    <textarea id="inputCommands" class="large-textarea" placeholder="click:id:submit-btn
+wait:2000
+scroll:500
+type:name:email:test@example.com
+navigate:https://example.com/page2
+random:3"></textarea>
+                </div>
+                <small style="color: var(--text-muted);">
+                    Available: click, type, wait, scroll, navigate, frame, random, hover
+                </small>
+            </div>
+        </div>
+
+        <!-- ========== TAB 2: ADVANCED ========== -->
+        <div class="tab-pane" id="tab-advanced">
+            <!-- Proxy Settings -->
+            <div class="card">
+                <div class="card-title">🔒 Proxy Settings</div>
+
+                <div class="info-box">
+                    <strong>⚡ Only /collect endpoints proxied</strong> — scripts + page load DIRECT.
+                    Near-zero bandwidth while spoofing GA4 location!
+                </div>
+
+                <div class="form-group" style="margin-top: 10px;">
+                    <div class="checkbox-group" style="margin-bottom: 8px;">
+                        <input type="checkbox" id="proxyEnabled" onchange="toggleProxySettings()">
+                        <label class="checkbox-label" for="proxyEnabled">Enable Proxy</label>
+                    </div>
+                    <label>Proxy URLs (one per line — random rotation if multiple)</label>
+                    <textarea id="proxyUrl" rows="3" disabled
+                        placeholder="Paste proxy URLs (one per line):
+http://user:pass@gate.provider.com:7000
+gate.decodo.com:7000:user-country-in-city-delhi:password"
+                        style="font-family: monospace; font-size: 11px; resize: vertical;"></textarea>
+                    <small style="color: var(--text-muted);">
+                        Formats: <code>http://user:pass@host:port</code> or <code>host:port:user:pass</code>
+                    </small>
+                </div>
+
+                <div style="margin-top: 6px; font-size: 11px; color: var(--text-muted);">
+                    <strong>Proxied:</strong> /g/collect, /j/collect (tiny beacons ~2KB) — <strong>Direct:</strong> gtag.js, gtm.js, page, images, everything else
+                </div>
+            </div>
+
+            <div class="two-col">
+                <!-- IP Rotation -->
+                <div class="card">
+                    <div class="card-title">🌐 IP Rotation (Indian IPs)</div>
+
+                    <div class="info-box" style="background: rgba(239, 68, 68, 0.1); border-left: 3px solid #ef4444;">
+                        <strong>⚠️</strong> X-Forwarded-For does <strong>NOT work</strong> with Cloudflare!
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group" style="flex: 0 0 auto;">
+                            <div class="checkbox-group" style="margin-top: 8px;">
+                                <input type="checkbox" id="ipRotation">
+                                <label class="checkbox-label" for="ipRotation">Enable IP Rotation</label>
+                            </div>
+                        </div>
+                        <div class="form-group" style="flex: 2;">
+                            <label>Sample IPs (refreshes every 3s)</label>
+                            <div id="sampleIPs" style="font-family: monospace; padding: 6px; background: var(--bg-input); border-radius: 6px; font-size: 11px;">
+                                Loading...
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Fast Mode -->
+                <div class="card">
+                    <div class="card-title">⚡ Fast Mode (Block Heavy Resources)</div>
+
+                    <div class="info-box" style="background: rgba(34, 197, 94, 0.1); border-left: 3px solid var(--success);">
+                        <strong>🚀</strong> Block images/videos/fonts → 3-5x faster. <strong>GA4 always works!</strong>
+                    </div>
+
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="fastMode" onchange="toggleFastMode()">
+                        <label class="checkbox-label" for="fastMode">Enable Fast Mode</label>
+                    </div>
+
+                    <div id="fastModeOptions" style="display: none; padding: 10px; background: var(--bg-input); border-radius: 6px;">
+                        <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;">
+                            <div class="checkbox-group">
+                                <input type="checkbox" id="blockImages" checked>
+                                <label class="checkbox-label" for="blockImages">🖼️ Images</label>
+                            </div>
+                            <div class="checkbox-group">
+                                <input type="checkbox" id="blockMedia" checked>
+                                <label class="checkbox-label" for="blockMedia">🎥 Videos</label>
+                            </div>
+                            <div class="checkbox-group">
+                                <input type="checkbox" id="blockFonts" checked>
+                                <label class="checkbox-label" for="blockFonts">🔤 Fonts</label>
+                            </div>
+                            <div class="checkbox-group">
+                                <input type="checkbox" id="blockStyles">
+                                <label class="checkbox-label" for="blockStyles">🎨 CSS</label>
+                            </div>
+                            <div class="checkbox-group">
+                                <input type="checkbox" id="blockScripts">
+                                <label class="checkbox-label" for="blockScripts">📜 JS</label>
+                            </div>
+                        </div>
+                        <div style="margin-top: 8px; font-size: 10px; color: #f59e0b;">
+                            ⚠️ Blocking CSS/JS may break page layout or GA4!
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Extension -->
+            <div class="card">
+                <div class="card-title">🧩 Browser Extension (SimilarWeb)</div>
+
+                <div class="info-box warning">
+                    <strong>⚠️</strong> Extensions only work in <strong>Slow</strong> or <strong>Slower</strong> mode (headed browser).
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group" style="flex: 0 0 auto;">
+                        <div class="checkbox-group" style="margin-top: 8px;">
+                            <input type="checkbox" id="extensionEnabled" onchange="toggleExtensionSettings()">
+                            <label class="checkbox-label" for="extensionEnabled">Load Extension</label>
+                        </div>
+                    </div>
+                    <div class="form-group" style="flex: 2;">
+                        <label>Extension Path</label>
+                        <div style="display: flex; gap: 8px;">
+                            <input type="text" id="extensionPath" placeholder="Path to unpacked extension folder" disabled style="flex: 1;">
+                            <button class="btn btn-secondary" id="browseExtensionBtn" onclick="browseExtension()" disabled style="flex: none; padding: 6px 12px;">
+                                📁 Browse
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="extensionInfo" class="extension-info not-loaded" style="display: none;">
+                    <span>📦</span>
+                    <span id="extensionName">No extension loaded</span>
+                </div>
+
+                <details style="margin-top: 10px; font-size: 11px; color: var(--text-muted);">
+                    <summary style="cursor:pointer;"><strong>How to get SimilarWeb extension</strong></summary>
+                    <ol style="margin-left: 20px; margin-top: 5px;">
+                        <li>Install SimilarWeb extension in Chrome</li>
+                        <li>Go to chrome://extensions/</li>
+                        <li>Enable "Developer mode"</li>
+                        <li>Find SimilarWeb and note the ID</li>
+                        <li>Copy extension folder from: <code>%LOCALAPPDATA%\Google\Chrome\User Data\Default\Extensions\[ID]</code></li>
+                        <li>Select the version folder containing manifest.json</li>
+                    </ol>
+                </details>
+            </div>
+        </div>
+
+        <!-- ========== TAB 3: MONITOR ========== -->
+        <div class="tab-pane" id="tab-monitor">
+            <div class="monitor-grid">
+                <!-- Activity Log -->
+                <div class="card">
+                    <div class="card-title">📋 Activity Log</div>
+                    <div class="log-output" id="logOutput">
+                        <div class="log-entry log-info">[System] GA4 Traffic Robo v2.4 initialized</div>
+                    </div>
+                </div>
+
+                <!-- GA4 Event Monitor -->
+                <div class="card">
+                    <div class="card-title" style="display:flex;justify-content:space-between;align-items:center;">
+                        📊 GA4 Event Monitor
+                        <span style="display:flex;gap:8px;align-items:center;">
+                            <span id="ga4Status" style="font-size:11px;color:var(--text-muted);">Idle</span>
+                            <button onclick="clearGA4Events()" style="background:var(--bg-input);color:var(--text-muted);border:1px solid var(--border);border-radius:4px;padding:2px 8px;cursor:pointer;font-size:10px;">Clear</button>
+                        </span>
+                    </div>
+                    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:10px;">
+                        <div style="text-align:center;padding:6px;background:var(--bg-input);border-radius:6px;">
+                            <div id="ga4Total" style="font-size:18px;font-weight:bold;color:var(--primary);">0</div>
+                            <div style="font-size:10px;color:var(--text-muted);">Total</div>
+                        </div>
+                        <div style="text-align:center;padding:6px;background:var(--bg-input);border-radius:6px;">
+                            <div id="ga4PageViews" style="font-size:18px;font-weight:bold;color:var(--success);">0</div>
+                            <div style="font-size:10px;color:var(--text-muted);">page_view</div>
+                        </div>
+                        <div style="text-align:center;padding:6px;background:var(--bg-input);border-radius:6px;">
+                            <div id="ga4Sessions" style="font-size:18px;font-weight:bold;color:var(--warning);">0</div>
+                            <div style="font-size:10px;color:var(--text-muted);">session</div>
+                        </div>
+                        <div style="text-align:center;padding:6px;background:var(--bg-input);border-radius:6px;">
+                            <div id="ga4Proxied" style="font-size:18px;font-weight:bold;color:#a78bfa;">0</div>
+                            <div style="font-size:10px;color:var(--text-muted);">Proxied</div>
+                        </div>
+                    </div>
+                    <div class="log-output" id="ga4EventLog" style="font-size:11px;">
+                        <div class="log-entry log-info" style="opacity:0.5;">[Monitor] Waiting for traffic to start...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // SECURITY FIX: Use preload bridge instead of direct require('electron')
+        const api = window.electronAPI;
+
+        let isRunning = false;
+        let totalVisits = 0;
+        let completedVisits = 0;
+
+        // ===== TAB SWITCHING =====
+        function switchTab(tabName) {
+            // Hide all panes, deactivate all buttons
+            document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
+            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+            // Show selected pane
+            document.getElementById('tab-' + tabName).classList.add('active');
+            // Activate matching button
+            document.querySelectorAll('.tab-btn').forEach(b => {
+                if (b.onclick && b.onclick.toString().includes(tabName)) b.classList.add('active');
+            });
+            // Clear monitor badge when switching to monitor tab
+            if (tabName === 'monitor') {
+                const badge = document.getElementById('monitorBadge');
+                badge.style.display = 'none';
+                badge.textContent = '0';
+            }
+        }
+
+        // Toggle command area visibility
+        function toggleCommandArea() {
+            const mode = document.getElementById('commandMode').value;
+            const section = document.getElementById('commandSection');
+            section.style.display = mode === 'Manual' ? 'block' : 'none';
+        }
+
+        // Get form configuration
+        function getConfig() {
+            return {
+                campaignName: document.getElementById('campaignName').value,
+                campaignLinks: document.getElementById('campaignLinks').value,
+                refererLinks: document.getElementById('refererLinks').value,
+                isReferer: document.getElementById('isReferer').checked,
+                repeat: document.getElementById('repeat').value,
+                threads: document.getElementById('threads').value,
+                threadDelay: document.getElementById('threadDelay').value,
+                avgSessionDuration: document.getElementById('avgSessionDuration').value,
+                bounceRate: document.getElementById('bounceRate').value,
+                pagePerSession: document.getElementById('pagePerSession').value,
+                userAgentType: document.getElementById('userAgentType').value,
+                location: document.getElementById('location').value,
+                playMode: document.getElementById('playMode').value,
+                commandMode: document.getElementById('commandMode').value,
+                percOldUsers: document.getElementById('percOldUsers').value,
+                previousURL: document.getElementById('previousURL').value,
+                useBaseUrlForOldUser: document.getElementById('useBaseUrlForOldUser').checked,
+                memClear: document.getElementById('memClear').value,
+                restrictToPrimaryDomain: document.getElementById('restrictToPrimaryDomain').checked,
+                adsBlock: document.getElementById('adsBlock').checked,
+                inputCommands: document.getElementById('inputCommands').value,
+                // Proxy settings
+                proxyEnabled: document.getElementById('proxyEnabled').checked,
+                proxyUrl: document.getElementById('proxyUrl').value,
+                
+                // Extension settings - NEW
+                extensionEnabled: document.getElementById('extensionEnabled').checked,
+                extensionPath: document.getElementById('extensionPath').value,
+                // IP Rotation - NEW v2.4
+                ipRotation: document.getElementById('ipRotation').checked,
+                // Fast Mode
+                fastMode: document.getElementById('fastMode').checked,
+                blockImages: document.getElementById('blockImages').checked,
+                blockMedia: document.getElementById('blockMedia').checked,
+                blockFonts: document.getElementById('blockFonts').checked,
+                blockStyles: document.getElementById('blockStyles').checked,
+                blockScripts: document.getElementById('blockScripts').checked
+            };
+        }
+
+        // Set form configuration
+        function setConfig(config) {
+            if (config.campaignName) document.getElementById('campaignName').value = config.campaignName;
+            if (config.campaignLinks) document.getElementById('campaignLinks').value = config.campaignLinks;
+            if (config.refererLinks) document.getElementById('refererLinks').value = config.refererLinks;
+            if (config.isReferer !== undefined) document.getElementById('isReferer').checked = config.isReferer;
+            if (config.repeat) document.getElementById('repeat').value = config.repeat;
+            if (config.threads) document.getElementById('threads').value = config.threads;
+            if (config.threadDelay) document.getElementById('threadDelay').value = config.threadDelay;
+            if (config.avgSessionDuration) document.getElementById('avgSessionDuration').value = config.avgSessionDuration;
+            if (config.bounceRate) document.getElementById('bounceRate').value = config.bounceRate;
+            if (config.pagePerSession) document.getElementById('pagePerSession').value = config.pagePerSession;
+            if (config.userAgentType) document.getElementById('userAgentType').value = config.userAgentType;
+            if (config.location) document.getElementById('location').value = config.location;
+            if (config.playMode) document.getElementById('playMode').value = config.playMode;
+            if (config.commandMode) {
+                document.getElementById('commandMode').value = config.commandMode;
+                toggleCommandArea();
+            }
+            if (config.percOldUsers) document.getElementById('percOldUsers').value = config.percOldUsers;
+            if (config.previousURL) document.getElementById('previousURL').value = config.previousURL;
+            if (config.useBaseUrlForOldUser !== undefined) document.getElementById('useBaseUrlForOldUser').checked = config.useBaseUrlForOldUser;
+            if (config.memClear) document.getElementById('memClear').value = config.memClear;
+            if (config.restrictToPrimaryDomain !== undefined) document.getElementById('restrictToPrimaryDomain').checked = config.restrictToPrimaryDomain;
+            if (config.adsBlock !== undefined) document.getElementById('adsBlock').checked = config.adsBlock;
+            if (config.inputCommands) document.getElementById('inputCommands').value = config.inputCommands;
+            // Proxy settings
+            if (config.proxyEnabled !== undefined) {
+                document.getElementById('proxyEnabled').checked = config.proxyEnabled;
+                toggleProxySettings();
+            }
+            if (config.proxyUrl) document.getElementById('proxyUrl').value = config.proxyUrl;
+            // Extension settings
+            if (config.extensionEnabled !== undefined) {
+                document.getElementById('extensionEnabled').checked = config.extensionEnabled;
+                toggleExtensionSettings();
+            }
+            if (config.extensionPath) document.getElementById('extensionPath').value = config.extensionPath;
+            // IP Rotation - NEW v2.4
+            if (config.ipRotation !== undefined) document.getElementById('ipRotation').checked = config.ipRotation;
+            // Fast Mode
+            if (config.fastMode !== undefined) {
+                document.getElementById('fastMode').checked = config.fastMode;
+                toggleFastMode();
+            }
+            if (config.blockImages !== undefined) document.getElementById('blockImages').checked = config.blockImages;
+            if (config.blockMedia !== undefined) document.getElementById('blockMedia').checked = config.blockMedia;
+            if (config.blockFonts !== undefined) document.getElementById('blockFonts').checked = config.blockFonts;
+            if (config.blockStyles !== undefined) document.getElementById('blockStyles').checked = config.blockStyles;
+            if (config.blockScripts !== undefined) document.getElementById('blockScripts').checked = config.blockScripts;
+        }
+
+        // Toggle proxy settings visibility
+        function toggleProxySettings() {
+            const enabled = document.getElementById('proxyEnabled').checked;
+            document.getElementById('proxyUrl').disabled = !enabled;
+            if (enabled) addLog('info', 'Proxy enabled');
+        }
+        
+        // Store previous mode for cancel
+        
+        // Toggle extension settings visibility - NEW
+        function toggleExtensionSettings() {
+            const enabled = document.getElementById('extensionEnabled').checked;
+            const extensionPath = document.getElementById('extensionPath');
+            const browseBtn = document.getElementById('browseExtensionBtn');
+            const extensionInfo = document.getElementById('extensionInfo');
+            
+            extensionPath.disabled = !enabled;
+            browseBtn.disabled = !enabled;
+            
+            if (enabled) {
+                extensionInfo.style.display = 'flex';
+                addLog('info', 'Extension loading enabled');
+                
+                // Check play mode
+                const playMode = document.getElementById('playMode').value;
+                if (playMode === 'Fastest' || playMode === 'Fast') {
+                    addLog('warn', '⚠️ Extensions require Slow or Slower mode!');
+                }
+            } else {
+                extensionInfo.style.display = 'none';
+            }
+        }
+        
+        // Toggle fast mode options visibility
+        function toggleFastMode() {
+            const enabled = document.getElementById('fastMode').checked;
+            const options = document.getElementById('fastModeOptions');
+            options.style.display = enabled ? 'block' : 'none';
+            
+            if (enabled) {
+                addLog('info', '⚡ Fast Mode enabled - blocking heavy resources');
+            }
+        }
+        
+        // Browse for extension folder - NEW
+        async function browseExtension() {
+            const result = await api.browseExtension();
+            
+            if (result.success) {
+                document.getElementById('extensionPath').value = result.path;
+                document.getElementById('extensionName').textContent = `${result.name} v${result.version}`;
+                document.getElementById('extensionInfo').classList.remove('not-loaded');
+                addLog('info', `Extension loaded: ${result.name} v${result.version}`);
+            } else if (result.error) {
+                addLog('error', result.error);
+            }
+        }
+
+        // Build proxy URL from individual fields
+        // FIXED: URL encode special characters
+
+        // Start traffic
+        async function startTraffic() {
+            const config = getConfig();
+            
+            if (!config.campaignLinks.trim()) {
+                alert('Please enter at least one campaign URL');
+                return;
+            }
+            
+            // Validate extension settings
+            if (config.extensionEnabled) {
+                if (!config.extensionPath) {
+                    alert('Please select an extension folder');
+                    return;
+                }
+                if (config.playMode === 'Fastest' || config.playMode === 'Fast') {
+                    const proceed = confirm('Extensions only work in Slow or Slower mode. Switch to Slow mode?');
+                    if (proceed) {
+                        document.getElementById('playMode').value = 'Slow';
+                        config.playMode = 'Slow';
+                    } else {
+                        return;
+                    }
+                }
+            }
+
+            totalVisits = parseInt(config.repeat);
+            completedVisits = 0;
+
+            updateUI(true);
+            addLog('info', `Starting traffic simulation with ${totalVisits} visits...`);
+            
+            // Log proxy status
+            if (config.proxyEnabled && config.proxyUrl) {
+                addLog('info', `Proxy ENABLED: Only GA requests will use proxy`);
+                addLog('info', `Proxy URL: ${config.proxyUrl.replace(/:[^:]*@/, ':***@')}`); // Hide password
+            }
+            
+            // Log extension status
+            if (config.extensionEnabled && config.extensionPath) {
+                addLog('info', `Extension ENABLED: ${config.extensionPath}`);
+            }
+
+            const result = await api.startTraffic(config);
+            
+            if (result.success) {
+                addLog('info', 'Traffic simulation completed successfully!');
+            } else {
+                addLog('error', `Error: ${result.error}`);
+            }
+            
+            updateUI(false);
+        }
+
+        // Stop traffic
+        async function stopTraffic() {
+            addLog('warning', '🛑 Stopping traffic - Terminating all sessions...');
+            document.getElementById('stopBtn').disabled = true;
+            document.getElementById('stopBtn').textContent = '⏳ Stopping...';
+            
+            try {
+                await api.stopTraffic();
+                addLog('info', '✅ All sessions terminated');
+            } catch (error) {
+                addLog('error', 'Error stopping: ' + error.message);
+            }
+            
+            document.getElementById('stopBtn').textContent = '⏹️ STOP';
+            updateUI(false);
+        }
+
+        // Update UI state
+        function updateUI(running) {
+            isRunning = running;
+            
+            document.getElementById('startBtn').disabled = running;
+            document.getElementById('stopBtn').disabled = !running;
+            
+            const indicator = document.getElementById('statusIndicator');
+            const statusText = document.getElementById('statusText');
+            
+            if (running) {
+                indicator.className = 'status-indicator running';
+                statusText.textContent = 'Running...';
+            } else {
+                indicator.className = 'status-indicator stopped';
+                statusText.textContent = completedVisits > 0 ? `Completed ${completedVisits} visits` : 'Ready to start';
+            }
+        }
+
+        // Update visit count
+        function updateVisitCount(count) {
+            completedVisits = count;
+            document.getElementById('visitCount').textContent = count;
+            
+            const progress = totalVisits > 0 ? (count / totalVisits) * 100 : 0;
+            document.getElementById('progressFill').style.width = `${progress}%`;
+            document.getElementById('progressText').textContent = `${Math.round(progress)}%`;
+        }
+
+        // Add log entry
+        function addLog(type, message) {
+            const logOutput = document.getElementById('logOutput');
+            const entry = document.createElement('div');
+            entry.className = `log-entry log-${type}`;
+            
+            const time = new Date().toLocaleTimeString();
+            entry.textContent = `[${time}] ${message}`;
+            
+            logOutput.appendChild(entry);
+            logOutput.scrollTop = logOutput.scrollHeight;
+            
+            // Keep only last 100 entries
+            while (logOutput.children.length > 100) {
+                logOutput.removeChild(logOutput.firstChild);
+            }
+
+            // Badge on monitor tab when not active
+            const monitorPane = document.getElementById('tab-monitor');
+            if (!monitorPane.classList.contains('active')) {
+                const badge = document.getElementById('monitorBadge');
+                const count = parseInt(badge.textContent || '0') + 1;
+                badge.textContent = count > 99 ? '99+' : count;
+                badge.style.display = 'inline-block';
+            }
+        }
+
+        // Save config
+        async function saveConfig() {
+            const config = getConfig();
+            const result = await api.saveConfig(config);
+            
+            if (result.success) {
+                addLog('info', `Configuration saved to: ${result.path}`);
+            } else if (result.error) {
+                addLog('error', `Failed to save: ${result.error}`);
+            }
+        }
+
+        // Load config
+        async function loadConfig() {
+            const result = await api.loadConfig();
+            
+            if (result.success) {
+                setConfig(result.config);
+                addLog('info', 'Configuration loaded successfully');
+            } else if (result.error) {
+                addLog('error', `Failed to load: ${result.error}`);
+            }
+        }
+
+        // Reset form
+        function resetForm() {
+            document.getElementById('campaignName').value = '';
+            document.getElementById('campaignLinks').value = '';
+            document.getElementById('refererLinks').value = '';
+            document.getElementById('isReferer').checked = false;
+            document.getElementById('repeat').value = '100';
+            document.getElementById('threads').value = '5';
+            document.getElementById('threadDelay').value = '1';
+            document.getElementById('avgSessionDuration').value = '60';
+            document.getElementById('bounceRate').value = '30';
+            document.getElementById('pagePerSession').value = '3';
+            document.getElementById('userAgentType').value = 'Default';
+            document.getElementById('location').value = 'India';
+            document.getElementById('playMode').value = 'Slow';
+            document.getElementById('commandMode').value = 'Automatic';
+            document.getElementById('percOldUsers').value = '0';
+            document.getElementById('memClear').value = '0';
+            document.getElementById('restrictToPrimaryDomain').checked = true;
+            document.getElementById('adsBlock').checked = false;
+            document.getElementById('previousURL').value = '';
+            document.getElementById('useBaseUrlForOldUser').checked = false;
+            document.getElementById('inputCommands').value = '';
+            // Proxy settings reset
+            document.getElementById('proxyEnabled').checked = false;
+            document.getElementById('proxyUrl').value = '';
+            // IP Rotation reset
+            document.getElementById('ipRotation').checked = false;
+            // Fast Mode reset
+            document.getElementById('fastMode').checked = false;
+            document.getElementById('blockImages').checked = true;
+            document.getElementById('blockMedia').checked = true;
+            document.getElementById('blockFonts').checked = true;
+            document.getElementById('blockStyles').checked = false;
+            document.getElementById('blockScripts').checked = false;
+            document.getElementById('fastModeOptions').style.display = 'none';
+            // Extension settings reset
+            document.getElementById('extensionEnabled').checked = false;
+            document.getElementById('extensionPath').value = '';
+            document.getElementById('extensionName').textContent = 'No extension loaded';
+            document.getElementById('extensionInfo').classList.add('not-loaded');
+            
+            toggleCommandArea();
+            toggleProxySettings();
+            toggleExtensionSettings();
+            addLog('info', 'Form reset to defaults');
+        }
+
+        // IPC Listeners (via secure preload bridge)
+        api.onVisitStarted(() => {
+            const active = parseInt(document.getElementById('activeThreads').textContent) + 1;
+            document.getElementById('activeThreads').textContent = active;
+        });
+
+        api.onVisitCompleted((count) => {
+            updateVisitCount(count);
+            const active = parseInt(document.getElementById('activeThreads').textContent);
+            if (active > 0) {
+                document.getElementById('activeThreads').textContent = active - 1;
+            }
+            addLog('info', `Visit #${count} completed`);
+        });
+
+        // Sample IP generation for preview - NEW v2.4
+        const IP_RANGES = [
+            { start: [49, 32], end: [49, 63], isp: 'Jio' },
+            { start: [117, 192], end: [117, 255], isp: 'Airtel' },
+            { start: [106, 192], end: [106, 223], isp: 'Vi' },
+            { start: [59, 88], end: [59, 95], isp: 'BSNL' },
+            { start: [49, 200], end: [49, 207], isp: 'ACT' }
+        ];
+        
+        function generateSampleIP() {
+            const range = IP_RANGES[Math.floor(Math.random() * IP_RANGES.length)];
+            const ip = `${range.start[0]}.${Math.floor(Math.random() * (range.end[1] - range.start[1]) + range.start[1])}.${Math.floor(Math.random() * 256)}.${Math.floor(Math.random() * 256)}`;
+            return `${ip} (${range.isp})`;
+        }
+        
+        function updateSampleIPs() {
+            const el = document.getElementById('sampleIPs');
+            if (el) {
+                el.textContent = [generateSampleIP(), generateSampleIP(), generateSampleIP()].join(' | ');
+            }
+        }
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            addLog('info', 'Application ready');
+            // Start sample IP rotation
+            updateSampleIPs();
+            setInterval(updateSampleIPs, 3000);
+
+            // Restore saved theme
+            const savedTheme = localStorage.getItem('theme') || 'dark';
+            if (savedTheme === 'light') {
+                document.documentElement.setAttribute('data-theme', 'light');
+                document.getElementById('themeToggle').textContent = '☀️';
+            }
+        });
+
+        // ===== LOW PRIORITY 1: Dark/Light Theme Toggle =====
+        function toggleTheme() {
+            const current = document.documentElement.getAttribute('data-theme');
+            const isLight = current === 'light';
+            document.documentElement.setAttribute('data-theme', isLight ? '' : 'light');
+            document.getElementById('themeToggle').textContent = isLight ? '🌙' : '☀️';
+            localStorage.setItem('theme', isLight ? 'dark' : 'light');
+        }
+
+        // ===== LOW PRIORITY 3: Real-time GA4 Event Monitor =====
+        let ga4Counters = { total: 0, pageViews: 0, sessions: 0, proxied: 0 };
+
+        function addGA4Event(eventType, url, proxied = false) {
+            ga4Counters.total++;
+            if (eventType === 'page_view') ga4Counters.pageViews++;
+            if (eventType === 'session_start') ga4Counters.sessions++;
+            if (proxied) ga4Counters.proxied++;
+
+            document.getElementById('ga4Total').textContent = ga4Counters.total;
+            document.getElementById('ga4PageViews').textContent = ga4Counters.pageViews;
+            document.getElementById('ga4Sessions').textContent = ga4Counters.sessions;
+            document.getElementById('ga4Proxied').textContent = ga4Counters.proxied;
+            document.getElementById('ga4Status').textContent = `${ga4Counters.total} events captured`;
+
+            const log = document.getElementById('ga4EventLog');
+            const entry = document.createElement('div');
+            entry.className = 'log-entry log-info';
+            const icon = proxied ? '🔄' : '📊';
+            const shortUrl = url.length > 60 ? url.substring(0, 60) + '...' : url;
+            entry.innerHTML = `<span style="color:var(--text-muted)">[${new Date().toLocaleTimeString()}]</span> ${icon} <strong style="color:var(--primary)">${eventType}</strong> ${shortUrl}`;
+            log.appendChild(entry);
+            log.scrollTop = log.scrollHeight;
+            while (log.children.length > 50) log.removeChild(log.firstChild);
+        }
+
+        function clearGA4Events() {
+            ga4Counters = { total: 0, pageViews: 0, sessions: 0, proxied: 0 };
+            document.getElementById('ga4Total').textContent = '0';
+            document.getElementById('ga4PageViews').textContent = '0';
+            document.getElementById('ga4Sessions').textContent = '0';
+            document.getElementById('ga4Proxied').textContent = '0';
+            document.getElementById('ga4Status').textContent = 'Cleared';
+            document.getElementById('ga4EventLog').innerHTML = '<div class="log-entry log-info" style="opacity:0.5">[Monitor] Cleared. Waiting for events...</div>';
+        }
+
+        // Listen for GA4 events from main process
+        if (api.onSessionEvent) {
+            api.onSessionEvent((data) => {
+                if (data && data.type === 'ga4_event') {
+                    addGA4Event(data.eventType || 'unknown', data.url || '', data.proxied || false);
+                }
+            });
+        }
+    </script>
+</body>
+</html>

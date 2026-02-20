@@ -1,0 +1,44 @@
+{
+  "name": "ga4-traffic-robo",
+  "version": "2.4.0",
+  "description": "GA4 Compatible Traffic Automation Tool with Realistic User Behavior Simulation",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "test": "jest --verbose",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
+    "test:visits": "jest tests/visits.test.js --verbose",
+    "test:ip": "jest tests/indianIP.test.js --verbose",
+    "test:proxy": "jest tests/proxyRouter.test.js --verbose",
+    "test:pool": "jest tests/proxyPool.test.js --verbose",
+    "test:ua": "jest tests/userAgents.test.js --verbose",
+    "test:intl": "jest tests/internationalIP.test.js --verbose",
+    "test:replay": "jest tests/sessionReplay.test.js --verbose",
+    "test:legacy": "node src/test.js",
+    "build:win": "electron-builder --win --config electron-builder.config.js",
+    "build:mac": "electron-builder --mac --config electron-builder.config.js",
+    "build:linux": "electron-builder --linux --config electron-builder.config.js",
+    "build:all": "electron-builder --win --mac --linux --config electron-builder.config.js",
+    "build:portable": "electron-builder --win portable --config electron-builder.config.js",
+    "install-browsers": "npx playwright install chromium",
+    "postinstall": "echo 'Run: npm run install-browsers to download Playwright browser'"
+  },
+  "author": "Uma Shankar",
+  "license": "MIT",
+  "dependencies": {
+    "p-queue": "^7.4.1",
+    "playwright": "^1.40.0",
+    "uuid": "^9.0.0",
+    "winston": "^3.11.0"
+  },
+  "devDependencies": {
+    "electron": "^28.0.0",
+    "jest": "^30.2.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": []
+}

@@ -1,0 +1,36 @@
+{
+  "manifest_version": 3,
+  "name": "SimilarWeb - Traffic Rank & Website Analysis",
+  "version": "5.8.2",
+  "description": "Get website traffic and key metrics for any website including engagement rate, traffic ranking, keyword ranking and traffic source.",
+  "permissions": [
+    "activeTab",
+    "storage",
+    "scripting"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_start"
+    }
+  ],
+  "icons": {
+    "16": "icon16.png",
+    "48": "icon48.png",
+    "128": "icon128.png"
+  },
+  "action": {
+    "default_icon": {
+      "16": "icon16.png",
+      "48": "icon48.png"
+    },
+    "default_title": "SimilarWeb"
+  }
+}
