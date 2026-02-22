@@ -186,12 +186,24 @@ class AutomaticVisitor {
                 this.logger.info(`🔴 BOUNCE VISIT - Exiting immediately (no additional pages, no wait)`);
                 this.replay.logBounce(Date.now() - startTime);
             } else {
-                // Non-bounce visit - wait and visit additional pages
+                // Non-bounce visit - time-budget aware waiting
+                // The configured wait IS the total time per page (including load + GA4 + behavior)
+                const configuredWaitMs = this.visit.getWaitTimePerPageMs();
+                const elapsedMs = Date.now() - (this._pageStartTime || startTime);
+                const remainingMs = configuredWaitMs - elapsedMs;
+                const MIN_PAGE_TIME = 3000;
 
-                // Wait for first page (Java: Thread.sleep(1000 * avgSessionDuration / pagePerSession))
-                const waitTimeMs = this.visit.getWaitTimePerPageMs();
-                this.logger.info(`Waiting ${waitTimeMs}ms on first page...`);
-                await this._sleep(waitTimeMs);
+                if (remainingMs > MIN_PAGE_TIME) {
+                    this.logger.info(`Page time budget: ${configuredWaitMs}ms, elapsed: ${elapsedMs}ms, remaining: ${remainingMs}ms`);
+                    await this._sleep(remainingMs);
+                } else if (elapsedMs < MIN_PAGE_TIME) {
+                    // Ensure minimum time on page
+                    const minRemaining = MIN_PAGE_TIME - elapsedMs;
+                    this.logger.info(`Page time budget: ${configuredWaitMs}ms, elapsed: ${elapsedMs}ms (under minimum, waiting ${minRemaining}ms)`);
+                    await this._sleep(minRemaining);
+                } else {
+                    this.logger.info(`Page time budget: ${configuredWaitMs}ms, elapsed: ${elapsedMs}ms (budget spent, moving on)`);
+                }
 
                 // Visit additional pages if pagePerSession > 1
                 const additionalPages = this.visit.getAdditionalPages();
@@ -297,7 +309,8 @@ class AutomaticVisitor {
      */
     async _visitFirstPage() {
         this.logger.info(`Navigating to campaign URL: ${this.campaignUrl}`);
-        const loadStartTime = Date.now();
+        // Track page start time — used by execute() for time-budget calculation
+        this._pageStartTime = Date.now();
         const isBounce = this.visit.isBounce();
 
         try {
@@ -337,7 +350,7 @@ class AutomaticVisitor {
                 await this._verifyExtension();
             }
 
-            const loadTimeMs = Date.now() - loadStartTime;
+            const loadTimeMs = Date.now() - this._pageStartTime;
             const loadTime = loadTimeMs / 1000;
             const pageTitle = this.page ? await this.page.title().catch(() => 'Unknown') : 'Unknown';
             const currentUrl = this.page ? this.page.url() : this.campaignUrl;
@@ -420,14 +433,14 @@ class AutomaticVisitor {
                 // Pick a random link (Java: int index = (int)(Math.random() * elementList.size()))
                 const randomIndex = Math.floor(Math.random() * links.length);
                 let linkUrl = links[randomIndex];
-                
+
                 // Handle relative URLs
                 linkUrl = this._resolveUrl(linkUrl);
-                
-                this.logger.info(`Navigating to page ${i + 2}: ${linkUrl}`);
-                const loadStartTime = Date.now();
 
-                // Navigate to the link - FIXED: Wait for full page load + network
+                this.logger.info(`Navigating to page ${i + 2}: ${linkUrl}`);
+                const pageStartTime = Date.now();
+
+                // Navigate to the link - Wait for full page load + network
                 await this.page.goto(linkUrl, {
                     waitUntil: 'networkidle',
                     timeout: 45000
@@ -436,7 +449,7 @@ class AutomaticVisitor {
                 // CRITICAL: Wait for GA4 to fire page_view event
                 await this._waitForGA4();
 
-                const loadTimeMs = Date.now() - loadStartTime;
+                const loadTimeMs = Date.now() - pageStartTime;
                 const loadTime = loadTimeMs / 1000;
                 const pageTitle = this.page ? await this.page.title().catch(() => '') : '';
                 this.replay.logNavigation(linkUrl, loadTimeMs, pageTitle);
@@ -445,17 +458,26 @@ class AutomaticVisitor {
                 // Simulate user behavior on the new page
                 await this._simulateUserBehavior();
 
-                // Wait 1: Random wait (Java: Thread.sleep(this.mRandomWait))
-                await this._sleep(this.randomWaitMs);
+                // Time-budget: configured wait IS total time per page (load + GA4 + behavior included)
+                const configuredWaitMs = this.visit.getWaitTimePerPageMs();
+                const elapsedMs = Date.now() - pageStartTime;
+                const remainingMs = configuredWaitMs - elapsedMs;
+                const MIN_PAGE_TIME = 3000;
 
-                // Wait 2: Session duration wait (Java: Thread.sleep(1000 * avgSessionDuration / pagePerSession))
-                const waitTimeMs = this.visit.getWaitTimePerPageMs();
-                await this._sleep(waitTimeMs);
-                this.logger.info(`Page ${i + 2} wait time: ${this.visit.getWaitTimePerPageSec()}s`);
+                if (remainingMs > MIN_PAGE_TIME) {
+                    this.logger.info(`Page ${i + 2} budget: ${configuredWaitMs}ms, elapsed: ${elapsedMs}ms, remaining: ${remainingMs}ms`);
+                    await this._sleep(remainingMs);
+                } else if (elapsedMs < MIN_PAGE_TIME) {
+                    const minRemaining = MIN_PAGE_TIME - elapsedMs;
+                    this.logger.info(`Page ${i + 2} budget: ${configuredWaitMs}ms, elapsed: ${elapsedMs}ms (under minimum, waiting ${minRemaining}ms)`);
+                    await this._sleep(minRemaining);
+                } else {
+                    this.logger.info(`Page ${i + 2} budget: ${configuredWaitMs}ms, elapsed: ${elapsedMs}ms (budget spent, moving on)`);
+                }
 
                 // Get new links for next iteration
                 links = await this._getPageLinks();
-                
+
                 // Remove visited link to avoid revisiting
                 links = links.filter(l => l !== linkUrl);
 
