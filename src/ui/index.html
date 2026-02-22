@@ -1018,6 +1018,42 @@ gate.decodo.com:7000:user-country-in-city-delhi:password"
                         <div style="color:var(--text-muted);font-size:11px;padding:8px 0;text-align:center;">No errors</div>
                     </div>
                 </div>
+
+                <!-- Bounce Tracking -->
+                <div class="card">
+                    <div class="card-title">Bounce Tracking</div>
+                    <div style="font-size:12px;line-height:1.8;">
+                        <div style="display:flex;justify-content:space-between;"><span>Bounce visits</span><strong id="dashBounceCount">0</strong></div>
+                        <div style="display:flex;justify-content:space-between;"><span>Non-bounce visits</span><strong id="dashNonBounceCount">0</strong></div>
+                        <div style="display:flex;justify-content:space-between;"><span>Avg bounce duration</span><strong id="dashAvgBounceDur" style="color:var(--success)">-</strong></div>
+                        <div style="display:flex;justify-content:space-between;"><span>Avg non-bounce duration</span><strong id="dashAvgNonBounceDur">-</strong></div>
+                        <div id="dashBounceWarn" style="display:none;margin-top:6px;padding:4px 8px;background:rgba(245,158,11,0.15);border-radius:4px;font-size:11px;color:var(--warning);">
+                            &#9888; Some bounce visits exceeded 10s
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Returning Users -->
+                <div class="card">
+                    <div class="card-title">Returning Users</div>
+                    <div style="font-size:12px;line-height:1.8;">
+                        <div style="display:flex;justify-content:space-between;"><span>Cookie jar</span><strong id="dashCookieStatus" style="color:var(--text-muted)">Empty</strong></div>
+                        <div style="display:flex;justify-content:space-between;"><span>Returning visits</span><strong id="dashReturningCount">0</strong></div>
+                        <div style="display:flex;justify-content:space-between;"><span>New visits</span><strong id="dashNewCount">0</strong></div>
+                        <div style="display:flex;justify-content:space-between;"><span>Returning %</span><strong id="dashReturningPct">-</strong></div>
+                    </div>
+                </div>
+
+                <!-- Session Duration -->
+                <div class="card">
+                    <div class="card-title">Session Duration</div>
+                    <div style="font-size:12px;line-height:1.8;">
+                        <div style="display:flex;justify-content:space-between;"><span>Configured avg</span><strong id="dashCfgDuration">-</strong></div>
+                        <div style="display:flex;justify-content:space-between;"><span>Actual avg</span><strong id="dashActualDuration">-</strong></div>
+                        <div style="display:flex;justify-content:space-between;"><span>Variance</span><strong id="dashDurationVariance">-</strong></div>
+                        <div style="display:flex;justify-content:space-between;"><span>Avg per page (actual)</span><strong id="dashPerPageActual">-</strong></div>
+                    </div>
+                </div>
             </div>
         </div>
 
@@ -2018,6 +2054,8 @@ gate.decodo.com:7000:user-country-in-city-delhi:password"
                             ga4Detected: replay.stats.ga4EventsDetected,
                             isBounce: replay.stats.isBounce,
                             errors: replay.stats.errors,
+                            durationSec: replay.durationSec,
+                            isOldUser: replay.sessionInfo && replay.sessionInfo.isOldUser,
                         });
                         if (replay.sessionInfo && replay.sessionInfo.userAgent) {
                             dashOnUA(replay.sessionInfo.userAgent);
@@ -2085,6 +2123,12 @@ gate.decodo.com:7000:user-country-in-city-delhi:password"
             proxyCities: {},
             errors: [],
             bounces: 0,
+            // Debug metrics
+            bounceDurations: [],   // seconds per bounce visit
+            nonBounceDurations: [], // seconds per non-bounce visit
+            returningCount: 0,
+            newCount: 0,
+            cookiesSaved: false,
             _interval: null,
         };
 
@@ -2098,6 +2142,8 @@ gate.decodo.com:7000:user-country-in-city-delhi:password"
                 proxyCities: {},
                 errors: [],
                 bounces: 0,
+                bounceDurations: [], nonBounceDurations: [],
+                returningCount: 0, newCount: 0, cookiesSaved: false,
             });
             dashRender();
         }
@@ -2121,7 +2167,15 @@ gate.decodo.com:7000:user-country-in-city-delhi:password"
                 if (pg >= 5) dash.pages['5+']++;
                 else dash.pages[pg] = (dash.pages[pg] || 0) + 1;
 
-                if (replayItem.isBounce) dash.bounces++;
+                if (replayItem.isBounce) {
+                    dash.bounces++;
+                    if (replayItem.durationSec != null) dash.bounceDurations.push(replayItem.durationSec);
+                } else {
+                    if (replayItem.durationSec != null) dash.nonBounceDurations.push(replayItem.durationSec);
+                }
+
+                if (replayItem.isOldUser) { dash.returningCount++; dash.cookiesSaved = true; }
+                else dash.newCount++;
             }
         }
 
@@ -2292,6 +2346,46 @@ gate.decodo.com:7000:user-country-in-city-delhi:password"
                     errList.innerHTML = '<div style="color:var(--text-muted);font-size:11px;padding:8px 0;text-align:center;">No errors</div>';
                 }
             }
+
+            // Bounce Tracking
+            document.getElementById('dashBounceCount').textContent = dash.bounces;
+            document.getElementById('dashNonBounceCount').textContent = dash.completed - dash.bounces;
+            const avgBounce = dash.bounceDurations.length > 0
+                ? (dash.bounceDurations.reduce((a, b) => a + b, 0) / dash.bounceDurations.length) : 0;
+            const avgNonBounce = dash.nonBounceDurations.length > 0
+                ? (dash.nonBounceDurations.reduce((a, b) => a + b, 0) / dash.nonBounceDurations.length) : 0;
+            const avgBounceEl = document.getElementById('dashAvgBounceDur');
+            avgBounceEl.textContent = dash.bounceDurations.length > 0 ? avgBounce.toFixed(1) + 's' : '-';
+            avgBounceEl.style.color = avgBounce > 10 ? 'var(--danger)' : 'var(--success)';
+            document.getElementById('dashAvgNonBounceDur').textContent = dash.nonBounceDurations.length > 0 ? avgNonBounce.toFixed(1) + 's' : '-';
+            const hasLongBounce = dash.bounceDurations.some(d => d > 10);
+            document.getElementById('dashBounceWarn').style.display = hasLongBounce ? 'block' : 'none';
+
+            // Returning Users
+            document.getElementById('dashCookieStatus').textContent = dash.cookiesSaved ? 'Saved' : 'Empty';
+            document.getElementById('dashCookieStatus').style.color = dash.cookiesSaved ? 'var(--success)' : 'var(--text-muted)';
+            document.getElementById('dashReturningCount').textContent = dash.returningCount;
+            document.getElementById('dashNewCount').textContent = dash.newCount;
+            const retTotal = dash.returningCount + dash.newCount;
+            document.getElementById('dashReturningPct').textContent = retTotal > 0
+                ? Math.round(dash.returningCount / retTotal * 100) + '%' : '-';
+
+            // Session Duration
+            const cfgDur = document.getElementById('avgSessionDuration') ? parseInt(document.getElementById('avgSessionDuration').value) || 0 : 0;
+            document.getElementById('dashCfgDuration').textContent = cfgDur > 0 ? cfgDur + 's' : '-';
+            document.getElementById('dashActualDuration').textContent = dash.nonBounceDurations.length > 0 ? avgNonBounce.toFixed(1) + 's' : '-';
+            if (cfgDur > 0 && dash.nonBounceDurations.length > 0) {
+                const variance = ((avgNonBounce - cfgDur) / cfgDur * 100);
+                const varEl = document.getElementById('dashDurationVariance');
+                varEl.textContent = (variance >= 0 ? '+' : '') + variance.toFixed(1) + '%';
+                varEl.style.color = Math.abs(variance) <= 15 ? 'var(--success)' : 'var(--warning)';
+            } else {
+                document.getElementById('dashDurationVariance').textContent = '-';
+            }
+            const cfgPages = document.getElementById('pagePerSession') ? parseFloat(document.getElementById('pagePerSession').value) || 0 : 0;
+            const totalPageTime = dash.nonBounceDurations.length > 0 ? avgNonBounce : 0;
+            document.getElementById('dashPerPageActual').textContent = (totalPageTime > 0 && cfgPages > 0)
+                ? (totalPageTime / cfgPages).toFixed(1) + 's' : '-';
         }
 
         function dashStartInterval() {
