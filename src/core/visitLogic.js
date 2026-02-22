@@ -32,6 +32,7 @@ class VisitLogic {
         this.campaignResults = [];  // Per-visit results for export
         this.campaignConfig = null; // Store config for export metadata
         this.campaignStartTime = null;
+        this.savedGACookies = null; // GA cookies from first visit for returning users
     }
 
     /**
@@ -389,7 +390,8 @@ class VisitLogic {
                             blockStyles,
                             blockScripts,
                             onProxyStats: (data) => this._notifyProxyStats(data),
-                            onGA4Event: (data) => this._notifyGA4Event(data)
+                            onGA4Event: (data) => this._notifyGA4Event(data),
+                            savedCookies: shuffledOldUser[i] ? this.savedGACookies : null
                         });
 
                         // Track active visitor
@@ -397,6 +399,12 @@ class VisitLogic {
 
                         try {
                             await visitor.execute();
+                            if (!this.savedGACookies) {
+                                this.savedGACookies = await visitor.getCookies();
+                                if (this.savedGACookies.length > 0) {
+                                    logger.info(`Captured ${this.savedGACookies.length} GA cookies for returning users`);
+                                }
+                            }
                             this._collectReplay(visitor);
                             this._collectResult(visitor);
                             this._notifyVisitCompleted();
