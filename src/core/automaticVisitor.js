@@ -40,6 +40,7 @@ class AutomaticVisitor {
         this.visit = config.visit;  // Visit object with pagePerSession and avgSessionDuration
         this.screenSize = config.screenSize;
         this.isOldUser = config.isOldUser;
+        this.savedCookies = config.savedCookies || null;
         this.restrictToPrimaryDomain = config.restrictToPrimaryDomain;
         this.previousURL = config.previousURL;
         this.useBaseUrlForOldUser = config.useBaseUrlForOldUser || false;  // NEW: Option to use base URL
@@ -175,6 +176,12 @@ class AutomaticVisitor {
                 await this._visitPreviousUrl();
             } else if (this.isOldUser && !this.visit.isBounce()) {
                 this.logger.info(`⚠️ Old user but no previous URL configured - will be treated as NEW user by GA4`);
+            }
+
+            // Inject saved GA cookies for returning users
+            if (this.savedCookies && this.savedCookies.length > 0) {
+                await this.context.addCookies(this.savedCookies);
+                this.logger.info(`👤 Injected ${this.savedCookies.length} GA cookies for returning user`);
             }
 
             // Visit the campaign URL (first page)
@@ -1211,6 +1218,17 @@ class AutomaticVisitor {
         } catch (e) {
             this.logger.debug(`GA4 event emit error: ${e.message}`);
         }
+    }
+
+    /**
+     * Extract GA cookies from the browser context
+     */
+    async getCookies() {
+        if (!this.context) return [];
+        try {
+            const all = await this.context.cookies();
+            return all.filter(c => c.name.startsWith('_ga') || c.name.startsWith('_gid') || c.name.startsWith('_gat'));
+        } catch { return []; }
     }
 
     /**
