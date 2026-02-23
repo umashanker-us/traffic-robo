@@ -361,6 +361,15 @@ class VisitLogic {
                             resolvedCampaignUrl = campaignUrl;
                         }
 
+                        // Cookie jar debug logging
+                        if (shuffledOldUser[i]) {
+                            if (this.savedGACookies && this.savedGACookies.length > 0) {
+                                logger.info(`COOKIE JAR: Injecting cookies for returning visit #${visitIndex}`);
+                            } else {
+                                logger.info(`COOKIE JAR: EMPTY - cannot create returning user!`);
+                            }
+                        }
+
                         const visitor = new AutomaticVisitor({
                             campaignUrl: resolvedCampaignUrl,
                             referer: resolvedReferer,
@@ -403,6 +412,7 @@ class VisitLogic {
                                 this.savedGACookies = await visitor.getCookies();
                                 if (this.savedGACookies.length > 0) {
                                     logger.info(`Captured ${this.savedGACookies.length} GA cookies for returning users`);
+                                    logger.info(`COOKIE JAR: Saved ${this.savedGACookies.length} cookies from visit #1`);
                                 }
                             }
                             this._collectReplay(visitor);

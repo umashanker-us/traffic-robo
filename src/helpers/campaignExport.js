@@ -101,6 +101,7 @@ function buildVisitRow(replay) {
         startTime: replay.startTime || '',
         endTime: replay.endTime || '',
         status: getVisitStatus(replay),
+        isReturningUser: sessionInfo.isOldUser ? 'Yes' : 'No',
     };
 }
 
@@ -110,7 +111,7 @@ function buildVisitRow(replay) {
 function generateCSV(replays) {
     const headers = [
         'Visit#', 'URL', 'ProxyUsed', 'ProxyStatus', 'Duration(s)', 'Pages',
-        'BounceOrNot', 'UserAgent', 'ScreenSize', 'Location',
+        'BounceOrNot', 'IsReturningUser', 'UserAgent', 'ScreenSize', 'Location',
         'GA4EventsCount', 'GA4EventTypes', 'StartTime', 'EndTime', 'Status'
     ];
 
@@ -124,6 +125,7 @@ function generateCSV(replays) {
             row.duration,
             row.pages,
             row.bounce,
+            row.isReturningUser,
             row.userAgent,
             row.screenSize,
             row.location,
