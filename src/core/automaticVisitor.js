@@ -182,10 +182,39 @@ class AutomaticVisitor {
             if (this.savedCookies && this.savedCookies.length > 0) {
                 await this.context.addCookies(this.savedCookies);
                 this.logger.info(`👤 Injected ${this.savedCookies.length} GA cookies for returning user`);
+                // DEBUG: Log exact cookies being injected
+                for (const c of this.savedCookies) {
+                    const expires = c.expires ? new Date(c.expires * 1000).toISOString() : 'session';
+                    this.logger.info(`  INJECT: ${c.name}=${c.value} | domain=${c.domain} path=${c.path} expires=${expires}`);
+                }
+                // Store injected _ga value for post-load comparison
+                const injectedGa = this.savedCookies.find(c => c.name === '_ga');
+                this._injectedGaValue = injectedGa ? injectedGa.value : null;
             }
 
             // Visit the campaign URL (first page)
             await this._visitFirstPage();
+
+            // DEBUG: After page load + GA4 fire, check if cookies survived
+            if (this._injectedGaValue && this.context) {
+                try {
+                    const postLoadCookies = await this.context.cookies();
+                    const gaCookies = postLoadCookies.filter(c => c.name.startsWith('_ga') || c.name.startsWith('_gid'));
+                    const currentGa = gaCookies.find(c => c.name === '_ga');
+                    const currentGaVal = currentGa ? currentGa.value : '(not found)';
+                    const match = currentGaVal === this._injectedGaValue;
+                    this.logger.info(`COOKIE CHECK: Injected _ga=${this._injectedGaValue}, After load _ga=${currentGaVal}, Match: ${match ? 'YES' : 'NO'}`);
+                    if (!match) {
+                        this.logger.warn(`COOKIE OVERWRITE DETECTED! GA4 replaced our injected _ga cookie`);
+                    }
+                    // Log all GA cookies after page load
+                    for (const c of gaCookies) {
+                        this.logger.info(`  POST-LOAD: ${c.name}=${c.value} | domain=${c.domain} path=${c.path}`);
+                    }
+                } catch (e) {
+                    this.logger.debug(`Cookie check failed: ${e.message}`);
+                }
+            }
 
             // CRITICAL: Check if this is a BOUNCE visit
             if (this.visit.isBounce()) {
@@ -1227,7 +1256,16 @@ class AutomaticVisitor {
         if (!this.context) return [];
         try {
             const all = await this.context.cookies();
-            return all.filter(c => c.name.startsWith('_ga') || c.name.startsWith('_gid') || c.name.startsWith('_gat'));
+            const gaCookies = all.filter(c => c.name.startsWith('_ga') || c.name.startsWith('_gid') || c.name.startsWith('_gat'));
+            // DEBUG: Log seed visit cookies being saved for future returning users
+            if (gaCookies.length > 0) {
+                this.logger.info(`SEED COOKIES: Saving ${gaCookies.length} GA cookies from visit #${this.threadId}`);
+                for (const c of gaCookies) {
+                    const expires = c.expires ? new Date(c.expires * 1000).toISOString() : 'session';
+                    this.logger.info(`  SEED: ${c.name}=${c.value} | domain=${c.domain} path=${c.path} expires=${expires} secure=${c.secure} sameSite=${c.sameSite}`);
+                }
+            }
+            return gaCookies;
         } catch { return []; }
     }
 
