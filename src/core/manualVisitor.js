@@ -77,7 +77,10 @@ class ManualVisitor {
             args: [
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
-                '--disable-blink-features=AutomationControlled'
+                '--disable-blink-features=AutomationControlled',
+                '--disable-client-side-phishing-detection',
+                '--disable-features=SafeBrowsing',
+                '--no-first-run'
             ]
         };
         

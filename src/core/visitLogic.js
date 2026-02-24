@@ -362,15 +362,17 @@ class VisitLogic {
                         this._notifyVisitStarted();
 
                         // Resolve traffic source per visit (new) or use legacy referer
-                        let resolvedReferer, resolvedIsReferer, resolvedCampaignUrl;
+                        let resolvedReferer, resolvedIsReferer, resolvedVisitReferer, resolvedCampaignUrl;
                         if (trafficSourceConfig) {
                             const resolved = resolveTrafficSource(trafficSourceConfig, campaignUrl);
                             resolvedReferer = resolved.referer;
                             resolvedIsReferer = resolved.isReferer;
+                            resolvedVisitReferer = resolved.visitReferer;
                             resolvedCampaignUrl = resolved.campaignUrl;
                         } else {
                             resolvedReferer = legacyReferer;
                             resolvedIsReferer = isReferer;
+                            resolvedVisitReferer = isReferer;  // Legacy mode: visit referer if set
                             resolvedCampaignUrl = campaignUrl;
                         }
 
@@ -396,6 +398,7 @@ class VisitLogic {
                             campaignUrl: resolvedCampaignUrl,
                             referer: resolvedReferer,
                             isReferer: resolvedIsReferer,
+                            visitReferer: resolvedVisitReferer,
                             userAgent: shuffledUA[i],
                             threadId: visitIndex,
                             visit: shuffledVisits[i],

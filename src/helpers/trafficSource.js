@@ -79,7 +79,9 @@ function buildUTMUrl(baseUrl, params) {
  *
  * @param {Object} config - Traffic source settings from UI
  * @param {string} campaignUrl - Original campaign URL for this visit
- * @returns {{ referer: string, isReferer: boolean, campaignUrl: string }}
+ * @returns {{ referer: string, isReferer: boolean, visitReferer: boolean, campaignUrl: string }}
+ *   - isReferer: true → set Referer HTTP header
+ *   - visitReferer: true → actually navigate to referer URL before campaign URL
  */
 function resolveTrafficSource(config, campaignUrl) {
     const type = config.trafficSourceType || 'Direct';
@@ -92,10 +94,16 @@ function resolveTrafficSource(config, campaignUrl) {
                 ? keywords[Math.floor(Math.random() * keywords.length)]
                 : '';
             const engine = config.searchEngine || 'Google';
+            const engineSource = engine.toLowerCase();  // google, bing, yahoo, duckduckgo
             return {
                 referer: getSearchReferrerUrl(engine, keyword),
                 isReferer: true,
-                campaignUrl,
+                visitReferer: false,  // Don't visit Google — just set header + UTMs
+                campaignUrl: buildUTMUrl(campaignUrl, {
+                    utm_source: engineSource,
+                    utm_medium: 'organic',
+                    utm_term: keyword,
+                }),
             };
         }
 
@@ -108,6 +116,7 @@ function resolveTrafficSource(config, campaignUrl) {
             return {
                 referer: url,
                 isReferer: !!url,
+                visitReferer: !!url,  // Referral: actually visit the referrer page
                 campaignUrl,
             };
         }
@@ -117,10 +126,15 @@ function resolveTrafficSource(config, campaignUrl) {
                 ? config.socialPlatforms
                 : ['Facebook'];
             const platform = platforms[Math.floor(Math.random() * platforms.length)];
+            const socialSource = platform.toLowerCase().replace(/\/.*$/, '');  // "twitter/x" → "twitter"
             return {
                 referer: getSocialReferrerUrl(platform),
                 isReferer: true,
-                campaignUrl,
+                visitReferer: false,  // Don't visit Facebook/Twitter — just set header + UTMs
+                campaignUrl: buildUTMUrl(campaignUrl, {
+                    utm_source: socialSource,
+                    utm_medium: 'social',
+                }),
             };
         }
 
@@ -128,6 +142,7 @@ function resolveTrafficSource(config, campaignUrl) {
             return {
                 referer: '',
                 isReferer: false,
+                visitReferer: false,
                 campaignUrl: buildUTMUrl(campaignUrl, {
                     utm_source: config.utmSource || '',
                     utm_medium: config.utmMedium || '',
@@ -146,7 +161,7 @@ function resolveTrafficSource(config, campaignUrl) {
             // social = remainder
 
             if (rand < direct) {
-                return { referer: '', isReferer: false, campaignUrl };
+                return { referer: '', isReferer: false, visitReferer: false, campaignUrl };
             } else if (rand < direct + organic) {
                 return resolveTrafficSource({
                     trafficSourceType: 'Organic Search',
@@ -171,6 +186,7 @@ function resolveTrafficSource(config, campaignUrl) {
             return {
                 referer: '',
                 isReferer: false,
+                visitReferer: false,
                 campaignUrl,
             };
     }

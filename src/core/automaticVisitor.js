@@ -33,6 +33,7 @@ class AutomaticVisitor {
         this.campaignUrl = config.campaignUrl;
         this.referer = config.referer;
         this.isReferer = config.isReferer;
+        this.visitReferer = config.visitReferer !== undefined ? config.visitReferer : config.isReferer;
         this.userAgent = config.userAgent;
         this.threadId = config.threadId;
         this.visit = config.visit;  // Visit object with pagePerSession and avgSessionDuration
@@ -358,8 +359,8 @@ class AutomaticVisitor {
             const waitStrategy = isBounce ? 'domcontentloaded' : 'load';
             const navTimeout = isBounce ? 15000 : 60000;
 
-            // Handle referer navigation
-            if (this.isReferer && this.referer) {
+            // Handle referer navigation — only visit referer page if visitReferer is true
+            if (this.visitReferer && this.referer) {
                 await this.page.goto(this.referer, {
                     waitUntil: isBounce ? 'domcontentloaded' : 'load',
                     timeout: navTimeout
@@ -953,6 +954,9 @@ class AutomaticVisitor {
                 '--disable-dev-shm-usage',
                 '--disable-blink-features=AutomationControlled',
                 '--disable-infobars',
+                '--disable-client-side-phishing-detection',
+                '--disable-features=SafeBrowsing',
+                '--no-first-run',
                 `--window-size=${this.screenSize.width},${this.screenSize.height}`
             ]
         };
