@@ -409,10 +409,13 @@ class VisitLogic {
                         try {
                             await visitor.execute();
                             if (!this.savedGACookies) {
-                                this.savedGACookies = await visitor.getCookies();
-                                if (this.savedGACookies.length > 0) {
-                                    logger.info(`Captured ${this.savedGACookies.length} GA cookies for returning users`);
-                                    logger.info(`COOKIE JAR: Saved ${this.savedGACookies.length} cookies from visit #1`);
+                                const cookies = visitor.getCookies();
+                                logger.info(`COOKIE JAR: getCookies() returned ${cookies.length} cookies from visit #${visitIndex}`);
+                                if (cookies.length > 0) {
+                                    this.savedGACookies = cookies;
+                                    logger.info(`COOKIE JAR: Saved ${this.savedGACookies.length} cookies for returning users`);
+                                } else {
+                                    logger.warn(`COOKIE JAR: No GA cookies found in visit #${visitIndex} — returning users will not work`);
                                 }
                             }
                             this._collectReplay(visitor);

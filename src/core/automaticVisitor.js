@@ -277,6 +277,9 @@ class AutomaticVisitor {
             this.logger.error(`Visit failed: ${error.message}`);
             throw error;
         } finally {
+            // CRITICAL: Extract cookies BEFORE closing context — context.cookies()
+            // returns empty after close, which was causing "COOKIE JAR: EMPTY" bug
+            await this._extractCookiesBeforeClose();
             this._saveReplay();
             await this._cleanup();
         }
@@ -1250,23 +1253,38 @@ class AutomaticVisitor {
     }
 
     /**
-     * Extract GA cookies from the browser context
+     * Extract GA cookies from context BEFORE it's closed.
+     * Called in execute() finally block, before _cleanup().
+     * Stores result in this._extractedCookies for getCookies() to return.
      */
-    async getCookies() {
-        if (!this.context) return [];
+    async _extractCookiesBeforeClose() {
+        if (!this.context) {
+            this.logger.warn(`COOKIE EXTRACT: context already null — cannot extract cookies`);
+            this._extractedCookies = [];
+            return;
+        }
         try {
+            this.logger.info(`COOKIE EXTRACT: Extracting cookies before context close...`);
             const all = await this.context.cookies();
             const gaCookies = all.filter(c => c.name.startsWith('_ga') || c.name.startsWith('_gid') || c.name.startsWith('_gat'));
-            // DEBUG: Log seed visit cookies being saved for future returning users
-            if (gaCookies.length > 0) {
-                this.logger.info(`SEED COOKIES: Saving ${gaCookies.length} GA cookies from visit #${this.threadId}`);
-                for (const c of gaCookies) {
-                    const expires = c.expires ? new Date(c.expires * 1000).toISOString() : 'session';
-                    this.logger.info(`  SEED: ${c.name}=${c.value} | domain=${c.domain} path=${c.path} expires=${expires} secure=${c.secure} sameSite=${c.sameSite}`);
-                }
+            this._extractedCookies = gaCookies;
+            this.logger.info(`COOKIE EXTRACT: Found ${all.length} total cookies, ${gaCookies.length} GA cookies`);
+            for (const c of gaCookies) {
+                const expires = c.expires ? new Date(c.expires * 1000).toISOString() : 'session';
+                this.logger.info(`  SEED: ${c.name}=${c.value} | domain=${c.domain} path=${c.path} expires=${expires} secure=${c.secure} sameSite=${c.sameSite}`);
             }
-            return gaCookies;
-        } catch { return []; }
+        } catch (e) {
+            this.logger.warn(`COOKIE EXTRACT: Failed: ${e.message}`);
+            this._extractedCookies = [];
+        }
+    }
+
+    /**
+     * Get GA cookies extracted from the visit.
+     * Returns cookies stored by _extractCookiesBeforeClose() (safe to call after context close).
+     */
+    getCookies() {
+        return this._extractedCookies || [];
     }
 
     /**
