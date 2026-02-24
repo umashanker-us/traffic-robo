@@ -361,8 +361,17 @@ class VisitLogic {
                             resolvedCampaignUrl = campaignUrl;
                         }
 
+                        // Force first batch to be new users — cookie jar is empty until
+                        // at least one visit completes and saves its GA cookies.
+                        const isFirstBatch = visitIndex <= threads;
+                        const effectiveOldUser = isFirstBatch ? false : shuffledOldUser[i];
+
+                        if (isFirstBatch && shuffledOldUser[i]) {
+                            logger.info(`COOKIE FIX: Visit #${visitIndex} forced to NEW user (first batch, cookie jar not yet populated)`);
+                        }
+
                         // Cookie jar debug logging
-                        if (shuffledOldUser[i]) {
+                        if (effectiveOldUser) {
                             if (this.savedGACookies && this.savedGACookies.length > 0) {
                                 logger.info(`COOKIE JAR: Injecting cookies for returning visit #${visitIndex}`);
                             } else {
@@ -378,7 +387,7 @@ class VisitLogic {
                             threadId: visitIndex,
                             visit: shuffledVisits[i],
                             screenSize: shuffledScreens[i],
-                            isOldUser: shuffledOldUser[i],
+                            isOldUser: effectiveOldUser,
                             restrictToPrimaryDomain,
                             previousURL,
                             useBaseUrlForOldUser,
@@ -400,7 +409,7 @@ class VisitLogic {
                             blockScripts,
                             onProxyStats: (data) => this._notifyProxyStats(data),
                             onGA4Event: (data) => this._notifyGA4Event(data),
-                            savedCookies: shuffledOldUser[i] ? this.savedGACookies : null
+                            savedCookies: effectiveOldUser ? this.savedGACookies : null
                         });
 
                         // Track active visitor

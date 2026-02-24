@@ -162,8 +162,24 @@ class AutomaticVisitor {
             await this._launchBrowser();
             await this._createContext();
 
+            // Inject saved GA cookies for returning users BEFORE any navigation
+            // Must happen right after context creation, before page.goto()
+            if (this.savedCookies && this.savedCookies.length > 0 && this.context) {
+                await this.context.addCookies(this.savedCookies);
+                this.logger.info(`👤 Injected ${this.savedCookies.length} GA cookies for returning user`);
+                // DEBUG: Log exact cookies being injected
+                for (const c of this.savedCookies) {
+                    const expires = c.expires ? new Date(c.expires * 1000).toISOString() : 'session';
+                    this.logger.info(`  INJECT: ${c.name}=${c.value} | domain=${c.domain} path=${c.path} expires=${expires}`);
+                }
+                // Store injected _ga value for post-load comparison
+                const injectedGa = this.savedCookies.find(c => c.name === '_ga');
+                this._injectedGaValue = injectedGa ? injectedGa.value : null;
+            }
+
             // Handle returning users (visit previous URL first to create cookie/session)
             // This makes GA4 see them as "returning" users
+            // Cookies are already injected above, so previous URL visit will use them
             //
             // Cases:
             // 1. Returning % = 0 → isOldUser = false → Skip (all NEW users)
@@ -176,20 +192,6 @@ class AutomaticVisitor {
                 await this._visitPreviousUrl();
             } else if (this.isOldUser && !this.visit.isBounce()) {
                 this.logger.info(`⚠️ Old user but no previous URL configured - will be treated as NEW user by GA4`);
-            }
-
-            // Inject saved GA cookies for returning users
-            if (this.savedCookies && this.savedCookies.length > 0) {
-                await this.context.addCookies(this.savedCookies);
-                this.logger.info(`👤 Injected ${this.savedCookies.length} GA cookies for returning user`);
-                // DEBUG: Log exact cookies being injected
-                for (const c of this.savedCookies) {
-                    const expires = c.expires ? new Date(c.expires * 1000).toISOString() : 'session';
-                    this.logger.info(`  INJECT: ${c.name}=${c.value} | domain=${c.domain} path=${c.path} expires=${expires}`);
-                }
-                // Store injected _ga value for post-load comparison
-                const injectedGa = this.savedCookies.find(c => c.name === '_ga');
-                this._injectedGaValue = injectedGa ? injectedGa.value : null;
             }
 
             // Visit the campaign URL (first page)
