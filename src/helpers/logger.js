@@ -8,11 +8,6 @@ const path = require('path');
 const fs = require('fs');
 const Constants = require('./constants');
 
-// Ensure logs directory exists
-if (!fs.existsSync(Constants.LOGS_PATH)) {
-    fs.mkdirSync(Constants.LOGS_PATH, { recursive: true });
-}
-
 // Custom format for log messages
 const logFormat = winston.format.combine(
     winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss.SSS' }),
@@ -24,30 +19,16 @@ const logFormat = winston.format.combine(
     })
 );
 
-// Create logger instance
+// Create logger instance — console only; file transports added per-campaign by initCampaignLogger
 const logger = winston.createLogger({
-    level: 'info', // Changed from 'debug' to 'info' for better performance
+    level: 'info',
     format: logFormat,
     transports: [
-        // Console transport with colors
         new winston.transports.Console({
             format: winston.format.combine(
                 winston.format.colorize(),
                 logFormat
             )
-        }),
-        // File transport for all logs
-        new winston.transports.File({
-            filename: path.join(Constants.LOGS_PATH, `traffic-robo-${new Date().toISOString().split('T')[0]}.log`),
-            maxsize: 10485760, // 10MB
-            maxFiles: 5
-        }),
-        // Separate file for errors
-        new winston.transports.File({
-            filename: path.join(Constants.LOGS_PATH, 'error.log'),
-            level: 'error',
-            maxsize: 10485760,
-            maxFiles: 3
         })
     ]
 });

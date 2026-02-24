@@ -2114,18 +2114,13 @@ gate.decodo.com:7000:user-country-in-city-delhi:password"
             }
         }
 
-        // Listen for simulation complete to prompt export
+        // Listen for simulation complete (CSV is auto-saved to campaign log folder)
         if (api.onSimulationComplete) {
             api.onSimulationComplete((data) => {
                 enableExportButtons(true);
                 if (data && data.totalResults > 0) {
-                    addLog('info', `Simulation complete! ${data.totalResults} visit results ready for export.`);
+                    addLog('info', `Simulation complete! ${data.totalResults} visit results recorded. CSV auto-saved to log folder.`);
                     switchTab('monitor');
-                    setTimeout(() => {
-                        if (confirm(`Simulation complete! ${data.totalResults} visits recorded.\n\nExport results now?`)) {
-                            exportCSV();
-                        }
-                    }, 500);
                 }
             });
         }

@@ -22,13 +22,11 @@
 const { chromium } = require('playwright');
 const path = require('path');
 const fs = require('fs');
-const { getLogger } = require('../helpers/logger');
+const { getLogger, getCampaignLogDir } = require('../helpers/logger');
 const Constants = require('../helpers/constants');
 const { ProxyRouter, isGACollectRequest, isGAScript, createPlaywrightProxy, parseProxyString } = require('../helpers/proxyRouter');
 const { generateIndianIP } = require('../helpers/indianIP');
 const { SessionReplay } = require('../helpers/sessionReplay');
-
-const REPLAYS_DIR = path.join(Constants.LOG_BASE_PATH, 'replays');
 
 class AutomaticVisitor {
     constructor(config) {
@@ -1165,15 +1163,18 @@ class AutomaticVisitor {
     }
 
     /**
-     * Save session replay JSON to data/replays/
+     * Save session replay JSON to campaign log dir replays/
      */
     _saveReplay() {
         try {
             if (!this.replay) return;
-            fs.mkdirSync(REPLAYS_DIR, { recursive: true });
+            const campaignDir = getCampaignLogDir();
+            if (!campaignDir) return;
+            const replaysDir = path.join(campaignDir, 'replays');
+            fs.mkdirSync(replaysDir, { recursive: true });
             const ts = Date.now();
             const filename = `replay_${this.threadId}_${ts}.json`;
-            const filepath = path.join(REPLAYS_DIR, filename);
+            const filepath = path.join(replaysDir, filename);
             const summary = this.replay.getSummary();
             fs.writeFileSync(filepath, JSON.stringify(summary, null, 2));
             this.logger.debug(`Replay saved: ${filename}`);
