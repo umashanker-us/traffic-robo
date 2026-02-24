@@ -20,13 +20,17 @@ const WRITABLE_PATH = isPackaged
     ? path.join(process.env.APPDATA || process.env.HOME || APP_PATH, 'GA4 Traffic Robo')
     : APP_PATH;
 
+// Fixed log base path — all logs, replays, and data go here in both dev and packaged mode
+const LOG_BASE_PATH = 'C:/Traffic_Logs';
+
 const Constants = {
     // Paths
     APP_PATH: APP_PATH,
     DATA_PATH: DATA_PATH,
     BROWSER_PATH: path.join(DATA_PATH, 'browsers'),
     LOCATION_PATH: path.join(DATA_PATH, 'location'),
-    LOGS_PATH: path.join(WRITABLE_PATH, 'logs'),
+    LOG_BASE_PATH: LOG_BASE_PATH,
+    LOGS_PATH: LOG_BASE_PATH,
     CONFIG_PATH: path.join(WRITABLE_PATH, 'config'),
     EXTENSIONS_PATH: path.join(APP_PATH, 'src', 'extensions'),
 

@@ -28,7 +28,7 @@ const { ProxyRouter, isGACollectRequest, isGAScript, createPlaywrightProxy, pars
 const { generateIndianIP } = require('../helpers/indianIP');
 const { SessionReplay } = require('../helpers/sessionReplay');
 
-const REPLAYS_DIR = path.join(Constants.DATA_PATH, 'replays');
+const REPLAYS_DIR = path.join(Constants.LOG_BASE_PATH, 'replays');
 
 class AutomaticVisitor {
     constructor(config) {
