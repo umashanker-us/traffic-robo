@@ -13,6 +13,7 @@ const VisitLogic = require('./core/visitLogic');
 const { logger, getCampaignLogDir, cleanOldLogs } = require('./helpers/logger');
 const Constants = require('./helpers/constants');
 const { generateCSV, generateJSON, getExportFilename } = require('./helpers/campaignExport');
+const { setDebugAllTracking, getDebugAllTracking } = require('./core/automaticVisitor');
 
 let mainWindow;
 let visitLogic = null;
@@ -423,4 +424,16 @@ ipcMain.handle('get-campaign-results-count', () => {
         return visitLogic.getCampaignResults().length;
     }
     return 0;
+});
+
+// ==================== Debug Tracking Toggle ====================
+
+ipcMain.handle('set-debug-tracking', (event, enabled) => {
+    setDebugAllTracking(enabled);
+    logger.info(`Debug all tracking pixels: ${enabled ? 'ON' : 'OFF'}`);
+    return { success: true, enabled: getDebugAllTracking() };
+});
+
+ipcMain.handle('get-debug-tracking', () => {
+    return getDebugAllTracking();
 });

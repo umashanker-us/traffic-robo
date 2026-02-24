@@ -28,6 +28,35 @@ const { ProxyRouter, isGACollectRequest, isGAScript, createPlaywrightProxy, pars
 const { generateIndianIP } = require('../helpers/indianIP');
 const { SessionReplay } = require('../helpers/sessionReplay');
 
+// ===== Debug All Tracking Pixels Toggle =====
+let debugAllTracking = false;
+
+const TRACKING_PATTERNS = [
+    'doubleclick.net', 'googleadservices.com', 'googlesyndication.com',
+    'facebook.com/tr', 'connect.facebook.net',
+    'omtrdc.net', '2o7.net', 'demdex.net',           // Adobe
+    'scorecardresearch.com', 'comscore.com',           // ComScore
+    'adsafeprotected.com', 'iasds01.com',              // IAS
+    'hotjar.com', 'clarity.ms', 'mouseflow.com',
+    'linkedin.com/px', 'snap.licdn.com',
+    'ads.twitter.com', 't.co/i/',
+    'pinterest.com/ct', 'tiktok.com/i18n',
+    'criteo.com', 'taboola.com', 'outbrain.com',
+    'amazon-adsystem.com', 'adnxs.com',
+];
+
+function isTrackingRequest(urlLower) {
+    return TRACKING_PATTERNS.some(p => urlLower.includes(p));
+}
+
+function setDebugAllTracking(val) {
+    debugAllTracking = !!val;
+}
+
+function getDebugAllTracking() {
+    return debugAllTracking;
+}
+
 class AutomaticVisitor {
     constructor(config) {
         this.campaignUrl = config.campaignUrl;
@@ -1134,6 +1163,9 @@ class AutomaticVisitor {
                 self.proxyRouter.stats.directRequests++;
                 if (isGAScript(url)) self.proxyRouter.stats.scriptsLoadedDirect++;
                 if (isGAScript(url)) self.replay.logRequest(url, true, false);
+                if (debugAllTracking && isTrackingRequest(urlLower)) {
+                    self.replay.logRequest(url, false, false);
+                }
                 await route.continue();
                 return;
             }
@@ -1142,8 +1174,10 @@ class AutomaticVisitor {
             if (isGACollectRequest(url)) {
                 self.replay.logRequest(url, true, false);
                 self._emitGA4Event(url, false);
+            } else if (debugAllTracking && isTrackingRequest(urlLower)) {
+                self.replay.logRequest(url, false, false);
             }
-            
+
             // 4. No proxy — just continue
             await route.continue();
         });
@@ -1351,3 +1385,5 @@ class AutomaticVisitor {
 }
 
 module.exports = AutomaticVisitor;
+module.exports.setDebugAllTracking = setDebugAllTracking;
+module.exports.getDebugAllTracking = getDebugAllTracking;

@@ -162,14 +162,12 @@ class SessionReplay {
             this.stats.directRequests++;
         }
 
-        // Only store GA requests to save memory
-        if (isGA) {
-            this._addEvent('request', {
-                url: url.substring(0, 150),
-                isGA,
-                proxied,
-            });
-        }
+        this._addEvent('request', {
+            url: url.substring(0, 150),
+            isGA,
+            proxied,
+            type: isGA ? 'ga4' : 'tracking',
+        });
     }
 
     // ==================== User Behavior Events ====================

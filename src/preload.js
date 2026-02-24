@@ -32,6 +32,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getReplayList: () => ipcRenderer.invoke('get-replay-list'),
     clearReplays: () => ipcRenderer.invoke('clear-replays'),
 
+    // ===== Debug Tracking =====
+    setDebugTracking: (enabled) => ipcRenderer.invoke('set-debug-tracking', enabled),
+    getDebugTracking: () => ipcRenderer.invoke('get-debug-tracking'),
+
     // ===== Log Folder =====
     openLogFolder: () => ipcRenderer.invoke('open-log-folder'),
     getLogFolder: () => ipcRenderer.invoke('get-log-folder'),

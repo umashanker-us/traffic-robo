@@ -1163,6 +1163,9 @@ gate.decodo.com:7000:user-country-in-city-delhi:password"
                         <label style="font-size:10px;display:flex;align-items:center;gap:4px;margin:0;text-transform:none;">
                             <input type="checkbox" id="replayAutoRefresh" checked style="width:13px;height:13px;"> Auto
                         </label>
+                        <label style="font-size:10px;display:flex;align-items:center;gap:4px;margin:0;text-transform:none;color:var(--warning);">
+                            <input type="checkbox" id="debugTrackingToggle" onchange="toggleDebugTracking(this.checked)" style="width:13px;height:13px;"> Debug Pixels
+                        </label>
                         <button onclick="clearReplays()" style="background:var(--bg-input);color:var(--text-muted);border:1px solid var(--border);border-radius:4px;padding:2px 8px;cursor:pointer;font-size:10px;">Clear</button>
                     </span>
                 </div>
@@ -1922,6 +1925,12 @@ gate.decodo.com:7000:user-country-in-city-delhi:password"
             });
         }
 
+        // ===== Debug Tracking Toggle =====
+        async function toggleDebugTracking(enabled) {
+            const result = await api.setDebugTracking(enabled);
+            console.log(`Debug tracking pixels: ${result.enabled ? 'ON' : 'OFF'}`);
+        }
+
         // ===== Session Replay UI =====
         let replaySelectedId = null;
 
@@ -2011,8 +2020,12 @@ gate.decodo.com:7000:user-country-in-city-delhi:password"
                         detail = `${evt.url || ''} ${evt.proxied ? '(proxied)' : '(direct)'} [${evt.status || 200}]`;
                         break;
                     case 'request':
-                        icon = evt.proxied ? '&#128272;' : '&#8594;'; cls = 'te-request';
-                        label = evt.proxied ? 'Proxied' : 'GA Request';
+                        if (evt.type === 'tracking') {
+                            icon = '&#128270;'; cls = 'te-info'; label = 'Pixel';
+                        } else {
+                            icon = evt.proxied ? '&#128272;' : '&#8594;'; cls = 'te-request';
+                            label = evt.proxied ? 'Proxied' : 'GA4';
+                        }
                         detail = evt.url || '';
                         break;
                     case 'bounce':
