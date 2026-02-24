@@ -52,6 +52,118 @@ const logger = winston.createLogger({
     ]
 });
 
+// ==================== Campaign-Specific Logging ====================
+
+let currentCampaignLogDir = null;
+let campaignTransports = [];
+
+/**
+ * Initialize campaign-specific log directory and transports
+ * @param {string} campaignName - Name of the campaign
+ * @returns {string} The created campaign log directory path
+ */
+function initCampaignLogger(campaignName = '') {
+    // Sanitize name: lowercase, replace non-alphanumeric with underscore, collapse, truncate
+    let sanitized = campaignName
+        .toLowerCase()
+        .replace(/[^a-z0-9]/g, '_')
+        .replace(/_+/g, '_')
+        .replace(/^_|_$/g, '')
+        .substring(0, 50);
+    if (!sanitized) sanitized = 'default';
+
+    const now = new Date();
+    const yearMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const day = String(now.getDate()).padStart(2, '0');
+    const time = `${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`;
+
+    const logDir = path.join(Constants.LOGS_PATH, yearMonth, day, `${sanitized}_${time}`);
+    fs.mkdirSync(logDir, { recursive: true });
+
+    // Create campaign-specific transports
+    const campaignFileTransport = new winston.transports.File({
+        filename: path.join(logDir, 'campaign.log'),
+        level: 'info'
+    });
+
+    const errorsFileTransport = new winston.transports.File({
+        filename: path.join(logDir, 'errors.log'),
+        level: 'warn'
+    });
+
+    // Add to logger
+    logger.add(campaignFileTransport);
+    logger.add(errorsFileTransport);
+
+    // Track for cleanup
+    campaignTransports = [campaignFileTransport, errorsFileTransport];
+    currentCampaignLogDir = logDir;
+
+    logger.info(`Campaign log directory: ${logDir}`);
+    return logDir;
+}
+
+/**
+ * Get the current campaign log directory path
+ * @returns {string|null}
+ */
+function getCampaignLogDir() {
+    return currentCampaignLogDir;
+}
+
+/**
+ * Remove campaign-specific transports and reset state
+ */
+function closeCampaignLogger() {
+    for (const transport of campaignTransports) {
+        try {
+            logger.remove(transport);
+        } catch (e) {
+            // Transport may already be removed
+        }
+    }
+    campaignTransports = [];
+    currentCampaignLogDir = null;
+}
+
+/**
+ * Delete log directories older than maxAgeDays
+ * Scans LOGS_PATH for YYYY-MM folders and removes old ones
+ * @param {number} maxAgeDays
+ */
+function cleanOldLogs(maxAgeDays = 30) {
+    try {
+        const logsPath = Constants.LOGS_PATH;
+        if (!fs.existsSync(logsPath)) return;
+
+        const cutoff = new Date();
+        cutoff.setDate(cutoff.getDate() - maxAgeDays);
+
+        const entries = fs.readdirSync(logsPath, { withFileTypes: true });
+        for (const entry of entries) {
+            if (!entry.isDirectory()) continue;
+            // Match YYYY-MM pattern
+            const match = entry.name.match(/^(\d{4})-(\d{2})$/);
+            if (!match) continue;
+
+            const year = parseInt(match[1], 10);
+            const month = parseInt(match[2], 10);
+
+            // Delete if the entire month is older than cutoff
+            // A month dir is "old" if the last day of that month is before cutoff
+            const lastDayOfMonth = new Date(year, month, 0); // day 0 of next month = last day of this month
+            if (lastDayOfMonth < cutoff) {
+                const dirPath = path.join(logsPath, entry.name);
+                fs.rmSync(dirPath, { recursive: true, force: true });
+                logger.info(`Cleaned old log directory: ${entry.name}`);
+            }
+        }
+    } catch (e) {
+        // Non-fatal — don't crash on cleanup failure
+        logger.warn(`Failed to clean old logs: ${e.message}`);
+    }
+}
+
 // Helper class to create thread-specific loggers
 class ThreadLogger {
     constructor(threadId) {
@@ -83,4 +195,4 @@ const getLogger = (threadId = null) => {
     return logger;
 };
 
-module.exports = { logger, getLogger, ThreadLogger };
+module.exports = { logger, getLogger, ThreadLogger, initCampaignLogger, getCampaignLogDir, closeCampaignLogger, cleanOldLogs };

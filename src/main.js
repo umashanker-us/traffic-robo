@@ -6,11 +6,12 @@
  * 1. Added extension support for SimilarWeb
  */
 
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const VisitLogic = require('./core/visitLogic');
-const { logger } = require('./helpers/logger');
+const { logger, getCampaignLogDir, cleanOldLogs } = require('./helpers/logger');
+const Constants = require('./helpers/constants');
 const { generateCSV, generateJSON, getExportFilename } = require('./helpers/campaignExport');
 
 let mainWindow;
@@ -48,7 +49,10 @@ function createWindow() {
     });
 }
 
-app.whenReady().then(createWindow);
+app.whenReady().then(() => {
+    cleanOldLogs();
+    createWindow();
+});
 
 app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') {
@@ -162,7 +166,8 @@ ipcMain.handle('start-traffic', async (event, config) => {
             mixedDirect: parseInt(config.mixedDirect) || 25,
             mixedOrganic: parseInt(config.mixedOrganic) || 35,
             mixedReferral: parseInt(config.mixedReferral) || 20,
-            mixedSocial: parseInt(config.mixedSocial) || 20
+            mixedSocial: parseInt(config.mixedSocial) || 20,
+            campaignName: config.campaignName || ''
         });
 
         return { success: true };
@@ -294,6 +299,24 @@ ipcMain.handle('browse-extension', async () => {
  */
 ipcMain.handle('is-running', () => {
     return visitLogic ? visitLogic.isRunning : false;
+});
+
+// ==================== Log Folder IPC Handlers ====================
+
+/**
+ * Open campaign log folder in OS file explorer
+ */
+ipcMain.handle('open-log-folder', async () => {
+    const logDir = getCampaignLogDir() || (visitLogic && visitLogic.campaignLogDir) || Constants.LOGS_PATH;
+    await shell.openPath(logDir);
+    return { success: true };
+});
+
+/**
+ * Get current campaign log folder path
+ */
+ipcMain.handle('get-log-folder', () => {
+    return getCampaignLogDir() || (visitLogic && visitLogic.campaignLogDir) || null;
 });
 
 // ==================== Session Replay IPC Handlers ====================

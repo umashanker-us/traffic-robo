@@ -8,7 +8,7 @@
  * 3. Proper stop functionality with browser cleanup
  */
 
-const { getLogger } = require('../helpers/logger');
+const { getLogger, initCampaignLogger, closeCampaignLogger, getCampaignLogDir } = require('../helpers/logger');
 const Constants = require('../helpers/constants');
 const { generateVisitsArray, calculateMetrics, shuffleArray } = require('../helpers/visits');
 const { getUserAgentList, getMatchingScreenSize, getMixedScreenSizes } = require('../helpers/userAgents');
@@ -16,6 +16,9 @@ const AutomaticVisitor = require('./automaticVisitor');
 const ManualVisitor = require('./manualVisitor');
 const { SessionReplayStore } = require('../helpers/sessionReplay');
 const { resolveTrafficSource } = require('../helpers/trafficSource');
+const { generateCSV } = require('../helpers/campaignExport');
+const fs = require('fs');
+const path = require('path');
 
 const logger = getLogger();
 
@@ -32,6 +35,7 @@ class VisitLogic {
         this.campaignResults = [];  // Per-visit results for export
         this.campaignConfig = null; // Store config for export metadata
         this.campaignStartTime = null;
+        this.campaignLogDir = null; // Campaign-specific log directory
         this.savedGACookies = null; // GA cookies from first visit for returning users
     }
 
@@ -98,8 +102,12 @@ class VisitLogic {
             mixedDirect = 25,
             mixedOrganic = 35,
             mixedReferral = 20,
-            mixedSocial = 20
+            mixedSocial = 20,
+            campaignName = ''
         } = config;
+
+        // Initialize campaign-specific logging before any log output
+        this.campaignLogDir = initCampaignLogger(campaignName);
 
         const startTime = Date.now();
         this.isRunning = true;
@@ -261,6 +269,10 @@ class VisitLogic {
             logger.info(`✅ Traffic simulation completed!`);
             logger.info(`Total time: ${totalTime.toFixed(2)}s`);
             logger.info(`Visits completed: ${this.completedVisits}`);
+
+            // Auto-save CSV to campaign log directory
+            this._autoSaveCSV();
+
             this._notifySimulationComplete();
 
         } catch (error) {
@@ -272,6 +284,7 @@ class VisitLogic {
             }
         } finally {
             this.isRunning = false;
+            closeCampaignLogger();
         }
     }
 
@@ -585,7 +598,11 @@ class VisitLogic {
             logger.info(`✅ All browsers closed`);
         }
         
+        // Auto-save CSV before closing campaign logger
+        this._autoSaveCSV();
+
         logger.info('✅ Traffic simulation stopped completely');
+        closeCampaignLogger();
     }
 
     /**
@@ -706,6 +723,23 @@ class VisitLogic {
             }
         } catch (e) {
             logger.debug(`Failed to collect result: ${e.message}`);
+        }
+    }
+
+    /**
+     * Auto-save campaign results CSV to the campaign log directory
+     */
+    _autoSaveCSV() {
+        try {
+            const logDir = getCampaignLogDir();
+            if (logDir && this.campaignResults.length > 0) {
+                const csv = generateCSV(this.campaignResults);
+                const csvPath = path.join(logDir, 'campaign_results.csv');
+                fs.writeFileSync(csvPath, csv, 'utf8');
+                logger.info(`Campaign results auto-saved to ${csvPath}`);
+            }
+        } catch (e) {
+            logger.warn(`Failed to auto-save CSV: ${e.message}`);
         }
     }
 

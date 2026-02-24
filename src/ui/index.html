@@ -1062,7 +1062,13 @@ gate.decodo.com:7000:user-country-in-city-delhi:password"
             <div class="monitor-grid">
                 <!-- Activity Log -->
                 <div class="card">
-                    <div class="card-title">📋 Activity Log</div>
+                    <div class="card-title" style="display:flex;justify-content:space-between;align-items:center;">
+                        📋 Activity Log
+                        <span style="display:flex;gap:8px;align-items:center;">
+                            <span id="logFolderPath" style="font-size:0.75em;opacity:0.6;max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title=""></span>
+                            <button id="openLogFolderBtn" onclick="api.openLogFolder()" style="display:none;background:var(--bg-input);color:var(--text-muted);border:1px solid var(--border);border-radius:4px;padding:2px 8px;cursor:pointer;font-size:10px;">Open Folder</button>
+                        </span>
+                    </div>
                     <div class="log-output" id="logOutput">
                         <div class="log-entry log-info">[System] GA4 Traffic Robo v2.4 initialized</div>
                     </div>
@@ -1551,6 +1557,17 @@ gate.decodo.com:7000:user-country-in-city-delhi:password"
             const result = await api.startTraffic(config);
 
             dashStopInterval();
+
+            // Show campaign log folder path (fetch once after start, keep visible)
+            try {
+                const logFolder = await api.getLogFolder();
+                if (logFolder) {
+                    const el = document.getElementById('logFolderPath');
+                    el.textContent = logFolder;
+                    el.title = logFolder;
+                    document.getElementById('openLogFolderBtn').style.display = 'inline-block';
+                }
+            } catch(e) {}
 
             if (result.success) {
                 addLog('info', 'Traffic simulation completed successfully!');

@@ -32,6 +32,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getReplayList: () => ipcRenderer.invoke('get-replay-list'),
     clearReplays: () => ipcRenderer.invoke('clear-replays'),
 
+    // ===== Log Folder =====
+    openLogFolder: () => ipcRenderer.invoke('open-log-folder'),
+    getLogFolder: () => ipcRenderer.invoke('get-log-folder'),
+
     // ===== Campaign Export =====
     exportCampaignCSV: () => ipcRenderer.invoke('export-campaign-csv'),
     exportCampaignJSON: () => ipcRenderer.invoke('export-campaign-json'),
