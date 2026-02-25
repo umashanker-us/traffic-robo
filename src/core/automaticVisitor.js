@@ -57,6 +57,51 @@ function getDebugAllTracking() {
     return debugAllTracking;
 }
 
+/**
+ * Patch /collect URL for returning users:
+ * - Remove _fv=1 or _fv=2 (first_visit marker)
+ * - Change sct=1 → sct=2 (session count)
+ * - Change _nsi=1 → _nsi=0 (new session indicator)
+ * - Change seg=0 → seg=1 (session engaged)
+ * Returns null if no changes needed.
+ */
+function patchCollectUrlForReturning(url) {
+    let modified = url;
+    let changed = false;
+
+    // Remove _fv parameter (first_visit event trigger)
+    const fvMatch = modified.match(/([?&])_fv=[^&]*/);
+    if (fvMatch) {
+        modified = modified.replace(/([?&])_fv=[^&]*/, (match, prefix) => {
+            // If it was the first param after ?, keep ? for next param
+            return match.startsWith('?') ? '?' : '';
+        });
+        // Clean up leading & after ? (e.g. ?&foo → ?foo)
+        modified = modified.replace('?&', '?');
+        changed = true;
+    }
+
+    // sct=1 → sct=2
+    if (/[?&]sct=1(&|$)/.test(modified)) {
+        modified = modified.replace(/([?&]sct=)1(&|$)/, '$12$2');
+        changed = true;
+    }
+
+    // _nsi=1 → _nsi=0
+    if (/[?&]_nsi=1(&|$)/.test(modified)) {
+        modified = modified.replace(/([?&]_nsi=)1(&|$)/, '$10$2');
+        changed = true;
+    }
+
+    // seg=0 → seg=1
+    if (/[?&]seg=0(&|$)/.test(modified)) {
+        modified = modified.replace(/([?&]seg=)0(&|$)/, '$11$2');
+        changed = true;
+    }
+
+    return changed ? modified : null;
+}
+
 class AutomaticVisitor {
     constructor(config) {
         this.campaignUrl = config.campaignUrl;
@@ -1136,19 +1181,28 @@ class AutomaticVisitor {
             // 3. Proxy — only /collect endpoints via proxy, everything else DIRECT
             if (self.proxyEnabled && self.proxyRouter) {
                 if (isGACollectRequest(url)) {
+                    // Returning user fix: patch /collect params
+                    let collectUrl = url;
+                    if (self.isOldUser) {
+                        const patched = patchCollectUrlForReturning(url);
+                        if (patched) {
+                            collectUrl = patched;
+                            self.logger.debug('RETURNING USER FIX: Removed _fv, set sct=2 for /collect request');
+                        }
+                    }
                     // /collect → proxy via Node.js http (no CONNECT tunnel)
                     self.proxyRouter.stats.totalRequests++;
                     self.proxyRouter.stats.proxiedRequests++;
                     try {
-                        const response = await self.proxyRouter.makeProxiedRequest(request);
+                        const response = await self.proxyRouter.makeProxiedRequest(request, collectUrl);
                         await route.fulfill({
                             status: response.status,
                             headers: response.headers,
                             body: response.body,
                         });
-                        self.replay.logRequest(url, true, true);
-                        self._emitProxyStats(url, true);
-                        self._emitGA4Event(url, true);
+                        self.replay.logRequest(collectUrl, true, true);
+                        self._emitProxyStats(collectUrl, true);
+                        self._emitGA4Event(collectUrl, true);
                     } catch (e) {
                         self.replay.logError('proxy_collect', e.message);
                         self.logger.debug(`/collect proxy failed, fallback direct: ${e.message}`);
@@ -1172,6 +1226,17 @@ class AutomaticVisitor {
 
             // 3b. No proxy but still track GA /collect requests for replay + monitor
             if (isGACollectRequest(url)) {
+                // Returning user fix: patch /collect params
+                if (self.isOldUser) {
+                    const patched = patchCollectUrlForReturning(url);
+                    if (patched) {
+                        self.logger.debug('RETURNING USER FIX: Removed _fv, set sct=2 for /collect request');
+                        self.replay.logRequest(patched, true, false);
+                        self._emitGA4Event(patched, false);
+                        await route.continue({ url: patched });
+                        return;
+                    }
+                }
                 self.replay.logRequest(url, true, false);
                 self._emitGA4Event(url, false);
             } else if (debugAllTracking && isTrackingRequest(urlLower)) {

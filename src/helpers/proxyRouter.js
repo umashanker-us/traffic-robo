@@ -171,26 +171,27 @@ class ProxyRouter {
      * NO CONNECT tunnel — proxy handles HTTPS internally
      * Works with Decodo and all providers
      */
-    async makeProxiedRequest(request) {
+    async makeProxiedRequest(request, urlOverride) {
         return new Promise((resolve, reject) => {
-            const targetUrl = new URL(request.url());
-            
+            const finalUrl = urlOverride || request.url();
+            const targetUrl = new URL(finalUrl);
+
             const headers = { ...request.headers(), 'Host': targetUrl.host };
             // Remove Playwright pseudo-headers
             delete headers[':authority'];
             delete headers[':method'];
             delete headers[':path'];
             delete headers[':scheme'];
-            
+
             if (this.proxyAuth) {
                 headers['Proxy-Authorization'] = `Basic ${this.proxyAuth}`;
             }
-            
+
             const req = http.request({
                 hostname: this.proxyHost,
                 port: this.proxyPort,
                 method: request.method(),
-                path: request.url(),
+                path: finalUrl,
                 headers,
                 timeout: 30000,
             }, (res) => {
