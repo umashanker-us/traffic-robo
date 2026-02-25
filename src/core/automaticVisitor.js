@@ -127,7 +127,7 @@ class AutomaticVisitor {
         // Proxy settings — only /collect endpoints proxied
         this.proxyEnabled = config.proxyEnabled || false;
         this.proxyUrl = config.proxyUrl || '';
-        this.proxyConfig = parseProxyString(this.proxyUrl);
+        this.proxyConfig = this.proxyEnabled ? parseProxyString(this.proxyUrl) : null;
         this.proxyRouter = null;
         
         // Extension settings - NEW: SimilarWeb support
@@ -1187,7 +1187,7 @@ class AutomaticVisitor {
                         const patched = patchCollectUrlForReturning(url);
                         if (patched) {
                             collectUrl = patched;
-                            self.logger.debug('RETURNING USER FIX: Removed _fv, set sct=2 for /collect request');
+                            self.logger.info('RETURNING USER FIX: Removed _fv, set sct=2 for /collect request');
                         }
                     }
                     // /collect → proxy via Node.js http (no CONNECT tunnel)
@@ -1226,11 +1226,13 @@ class AutomaticVisitor {
 
             // 3b. No proxy but still track GA /collect requests for replay + monitor
             if (isGACollectRequest(url)) {
+                self.logger.info(`ROUTE HANDLER: isOldUser=${self.isOldUser} | /collect detected`);
                 // Returning user fix: patch /collect params
                 if (self.isOldUser) {
                     const patched = patchCollectUrlForReturning(url);
+                    self.logger.info(`RETURNING USER PATCH: patched=${patched ? 'YES' : 'NO'} | had _fv=${url.includes('_fv=')} sct=1=${url.includes('sct=1')}`);
                     if (patched) {
-                        self.logger.debug('RETURNING USER FIX: Removed _fv, set sct=2 for /collect request');
+                        self.logger.info('RETURNING USER FIX: Removed _fv, set sct=2 for /collect request');
                         self.replay.logRequest(patched, true, false);
                         self._emitGA4Event(patched, false);
                         await route.continue({ url: patched });

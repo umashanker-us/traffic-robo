@@ -120,7 +120,7 @@ function parseProxyString(proxyString) {
             full: `${parsed.protocol}//${parsed.host}`
         };
     } catch (error) {
-        logger.error(`Invalid proxy format: ${proxyString}`);
+        logger.warn(`Invalid proxy format: ${proxyString.substring(0, 80)}${proxyString.length > 80 ? '...' : ''}`);
         return null;
     }
 }
