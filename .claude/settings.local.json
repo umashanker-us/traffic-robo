@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx jest --verbose)",
+      "Bash(npm run build:dir:*)",
+      "Bash(npm install:*)",
+      "Bash(npm run build:*)",
+      "Bash(python:*)",
+      "Bash(git checkout:*)",
+      "Bash(npm start)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git merge:*)",
+      "Bash(git push:*)",
+      "Bash(npx jest --no-cache)",
+      "Bash(node:*)",
+      "Bash(npx playwright:*)",
+      "Bash(git init:*)",
+      "Bash(git config:*)",
+      "Bash(npx jest:*)"
+    ]
+  }
+}

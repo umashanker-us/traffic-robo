@@ -75,7 +75,6 @@ module.exports = {
         uninstallerIcon: "build/icon.ico",
         installerHeaderIcon: "build/icon.ico",
         perMachine: false,
-        license: "LICENSE",
     },
 
     portable: {
