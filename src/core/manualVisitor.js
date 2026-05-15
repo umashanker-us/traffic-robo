@@ -317,6 +317,7 @@ class ManualVisitor {
         ];
 
         await this.context.route('**/*', async (route, request) => {
+          try {
             const url = request.url();
             const urlLower = url.toLowerCase();
             const resourceType = request.resourceType();
@@ -357,9 +358,9 @@ class ManualVisitor {
                             headers: response.headers,
                             body: response.body,
                         });
-                        self.replay?.logRequest?.(collectUrl, true, true);
+                        if (self.replay) self.replay.logRequest(collectUrl, true, true);
                     } catch (e) {
-                        self.replay?.logError?.('proxy_collect', e.message);
+                        if (self.replay) self.replay.logError('proxy_collect', e.message);
                         await route.continue();
                     }
                     return;
@@ -368,7 +369,7 @@ class ManualVisitor {
                 self.proxyRouter.stats.directRequests++;
                 if (isGAScript(url)) {
                     self.proxyRouter.stats.scriptsLoadedDirect++;
-                    self.replay?.logRequest?.(url, true, false);
+                    if (self.replay) self.replay.logRequest(url, true, false);
                 }
                 await route.continue();
                 return;
@@ -379,15 +380,20 @@ class ManualVisitor {
                 if (self.isOldUser) {
                     const patched = patchCollectUrlForReturning(url);
                     if (patched) {
-                        self.replay?.logRequest?.(patched, true, false);
+                        if (self.replay) self.replay.logRequest(patched, true, false);
                         await route.continue({ url: patched });
                         return;
                     }
                 }
-                self.replay?.logRequest?.(url, true, false);
+                if (self.replay) self.replay.logRequest(url, true, false);
             }
 
             await route.continue();
+          } catch (err) {
+            // Page closed mid-request or route already handled — common, swallow.
+            try { await route.continue(); } catch {}
+            self.logger.debug(`Route handler error (ignored): ${err.message}`);
+          }
         });
     }
 

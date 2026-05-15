@@ -1113,10 +1113,11 @@ class AutomaticVisitor {
         ];
         
         await this.context.route('**/*', async (route, request) => {
+          try {
             const url = request.url();
             const urlLower = url.toLowerCase();
             const resourceType = request.resourceType();
-            
+
             // 1. Ad blocking
             if (self.adsBlock && blockedAdPatterns.some(p => urlLower.includes(p))) {
                 await route.abort();
@@ -1205,8 +1206,13 @@ class AutomaticVisitor {
 
             // 4. No proxy — just continue
             await route.continue();
+          } catch (err) {
+            // Page closed mid-request or route already handled — common, swallow.
+            try { await route.continue(); } catch {}
+            self.logger.debug(`Route handler error (ignored): ${err.message}`);
+          }
         });
-        
+
         const features = [];
         if (this.proxyEnabled) features.push('proxy-collect-only');
         if (this.adsBlock) features.push('ad-block');

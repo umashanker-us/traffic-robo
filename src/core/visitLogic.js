@@ -76,11 +76,9 @@ class VisitLogic {
             restrictToPrimaryDomain = true,
             playMode = Constants.PLAY_MODES.SLOW,
             adsBlock = false,
-            // Proxy settings
+            // Proxy settings (proxy is always /collect-only — page loads go direct)
             proxyEnabled = false,
             proxyUrl = '',
-
-            proxyGAOnly = true,  // Only proxy GA requests (recommended)
             // Extension settings - NEW
             extensionEnabled = false,
             extensionPath = '',

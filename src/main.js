@@ -15,6 +15,8 @@ const Constants = require('./helpers/constants');
 const { generateCSV, generateJSON, getExportFilename } = require('./helpers/campaignExport');
 const { setDebugAllTracking, getDebugAllTracking } = require('./core/automaticVisitor');
 const { parseCampaignCsv, CSV_TEMPLATE } = require('./helpers/campaignCsv');
+const { sanitizeConfigForLog } = require('./helpers/sanitizeConfig');
+const { validateExtensionDir } = require('./helpers/extensionValidator');
 
 let mainWindow;
 let visitLogic = null;
@@ -75,18 +77,13 @@ app.on('activate', () => {
  */
 ipcMain.handle('start-traffic', async (event, config) => {
     try {
-        logger.info('Starting traffic simulation with config:', config);
+        logger.info('Starting traffic simulation with config:', sanitizeConfigForLog(config));
 
         // Parse URL list
         const urlList = (config.campaignLinks || '')
             .split('\n')
             .map(url => url.trim())
             .filter(url => url.length > 0);
-
-        // Parse referer list
-        const refererList = config.refererLinks
-            ? config.refererLinks.split('\n').map(url => url.trim()).filter(url => url.length > 0)
-            : [''];
 
         const hasCsv = Array.isArray(config.csvCampaignRows) && config.csvCampaignRows.length > 0;
         if (urlList.length === 0 && !hasCsv) {
@@ -120,8 +117,6 @@ ipcMain.handle('start-traffic', async (event, config) => {
         // Start the simulation
         await visitLogic.start({
             urlList,
-            refererList,
-            isReferer: config.isReferer,
             repeat: parseInt(config.repeat) || 100,
             avgSessionDuration: parseInt(config.avgSessionDuration) || 60,
             bounceRate: parseInt(config.bounceRate) || 30,
@@ -142,7 +137,6 @@ ipcMain.handle('start-traffic', async (event, config) => {
             // Proxy settings - Only GA requests use proxy
             proxyEnabled: config.proxyEnabled || false,
             proxyUrl: config.proxyUrl || '',
-            proxyGAOnly: true,  // Always true - only GA requests through proxy
             // Extension settings - NEW
             extensionEnabled: config.extensionEnabled || false,
             extensionPath: config.extensionPath || '',
@@ -273,25 +267,17 @@ ipcMain.handle('browse-extension', async () => {
         });
 
         if (filePaths && filePaths.length > 0) {
-            const extensionPath = filePaths[0];
-            
-            // Verify it's a valid extension (has manifest.json)
-            const manifestPath = path.join(extensionPath, 'manifest.json');
-            if (fs.existsSync(manifestPath)) {
-                const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-                logger.info(`Extension selected: ${manifest.name || 'Unknown'} v${manifest.version || '?'}`);
-                return { 
-                    success: true, 
-                    path: extensionPath,
-                    name: manifest.name || 'Unknown Extension',
-                    version: manifest.version || '?'
-                };
-            } else {
-                return { 
-                    success: false, 
-                    error: 'Invalid extension folder. manifest.json not found.' 
+            const result = validateExtensionDir(filePaths[0]);
+            if (result.valid) {
+                logger.info(`Extension selected: ${result.name} v${result.version}`);
+                return {
+                    success: true,
+                    path: result.path,
+                    name: result.name,
+                    version: result.version,
                 };
             }
+            return { success: false, error: result.error };
         }
         return { success: false };
 
