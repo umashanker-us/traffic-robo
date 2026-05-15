@@ -45,6 +45,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     exportCampaignJSON: () => ipcRenderer.invoke('export-campaign-json'),
     getCampaignResultsCount: () => ipcRenderer.invoke('get-campaign-results-count'),
 
+    // ===== Campaign CSV (per-URL ranges) =====
+    loadCampaignCsv: () => ipcRenderer.invoke('load-campaign-csv'),
+    downloadCampaignCsvTemplate: () => ipcRenderer.invoke('download-campaign-csv-template'),
+
     // ===== Event Listeners =====
     onVisitStarted: (callback) => {
         const subscription = (_event) => callback();

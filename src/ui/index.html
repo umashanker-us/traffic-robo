@@ -565,6 +565,21 @@
                         <textarea id="campaignLinks" class="large-textarea" placeholder="https://example.com?utm_source=google&utm_medium=cpc"></textarea>
                     </div>
 
+                    <div class="form-group" style="padding:10px;background:var(--bg-input);border-radius:6px;border-left:3px solid #4a9eff;">
+                        <label style="font-weight:600;margin-bottom:6px;">📄 Campaign CSV (per-URL ranges) — optional</label>
+                        <div style="font-size:11px;color:#888;margin-bottom:8px;">
+                            CSV columns: <code>url,visits,bounce,duration,pages</code> — each numeric field
+                            accepts an exact value (<code>42</code>) or a range (<code>40-50</code>) that is
+                            randomly resolved each run. Overrides Total Visits and global bounce/duration/pages.
+                        </div>
+                        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px;">
+                            <button type="button" class="secondary-btn" onclick="loadCampaignCsv()">📂 Load CSV</button>
+                            <button type="button" class="secondary-btn" onclick="downloadCampaignCsvTemplate()">⬇️ Download Template</button>
+                            <button type="button" class="secondary-btn" onclick="clearCampaignCsv()">✖ Clear</button>
+                        </div>
+                        <div id="csvCampaignStatus" style="font-size:11px;color:#888;">No CSV loaded — using URL list above.</div>
+                    </div>
+
                     <div class="form-group">
                         <div class="checkbox-group">
                             <input type="checkbox" id="trafficSourceEnabled" onchange="toggleTrafficSource()">
@@ -1242,10 +1257,67 @@ gate.decodo.com:7000:user-country-in-city-delhi:password"
             return platforms;
         }
 
+        // ===== Campaign CSV state (in-memory, per session) =====
+        let campaignCsvRows = null;
+        let campaignCsvPath = null;
+
+        async function loadCampaignCsv() {
+            try {
+                const res = await api.loadCampaignCsv();
+                if (res.cancelled) return;
+                if (!res.success) {
+                    alert('Failed to load CSV:\n' + (res.error || 'Unknown error'));
+                    addLog('error', 'CSV load failed: ' + (res.error || 'Unknown'));
+                    return;
+                }
+                campaignCsvRows = res.rows;
+                campaignCsvPath = res.path;
+                const totalVisits = res.rows.reduce((sum, r) => {
+                    return sum + (r.visits.kind === 'value' ? r.visits.value : Math.round((r.visits.min + r.visits.max) / 2));
+                }, 0);
+                const fileName = res.path.split(/[\\/]/).pop();
+                let msg = `✅ ${fileName} — ${res.rows.length} URLs, ~${totalVisits} total visits`;
+                if (res.errors && res.errors.length > 0) {
+                    msg += ` (${res.errors.length} warning${res.errors.length > 1 ? 's' : ''})`;
+                }
+                document.getElementById('csvCampaignStatus').innerHTML = msg;
+                document.getElementById('csvCampaignStatus').style.color = '#4a9eff';
+                addLog('info', `Campaign CSV loaded: ${res.rows.length} URLs from ${res.path}`);
+                if (res.errors && res.errors.length > 0) {
+                    res.errors.forEach(e => addLog('warning', 'CSV: ' + e));
+                }
+            } catch (e) {
+                alert('Error loading CSV: ' + e.message);
+            }
+        }
+
+        async function downloadCampaignCsvTemplate() {
+            try {
+                const res = await api.downloadCampaignCsvTemplate();
+                if (res.success) {
+                    addLog('info', 'CSV template saved to ' + res.path);
+                } else if (res.error) {
+                    alert('Failed to save template: ' + res.error);
+                }
+            } catch (e) {
+                alert('Error: ' + e.message);
+            }
+        }
+
+        function clearCampaignCsv() {
+            campaignCsvRows = null;
+            campaignCsvPath = null;
+            const el = document.getElementById('csvCampaignStatus');
+            el.textContent = 'No CSV loaded — using URL list above.';
+            el.style.color = '#888';
+            addLog('info', 'Campaign CSV cleared');
+        }
+
         function getConfig() {
             return {
                 campaignName: document.getElementById('campaignName').value,
                 campaignLinks: document.getElementById('campaignLinks').value,
+                csvCampaignRows: campaignCsvRows,
                 repeat: document.getElementById('repeat').value,
                 threads: document.getElementById('threads').value,
                 threadDelay: document.getElementById('threadDelay').value,
@@ -1502,9 +1574,10 @@ gate.decodo.com:7000:user-country-in-city-delhi:password"
         // Start traffic
         async function startTraffic() {
             const config = getConfig();
-            
-            if (!config.campaignLinks.trim()) {
-                alert('Please enter at least one campaign URL');
+
+            const hasCsv = Array.isArray(config.csvCampaignRows) && config.csvCampaignRows.length > 0;
+            if (!hasCsv && !config.campaignLinks.trim()) {
+                alert('Please enter at least one campaign URL (or load a Campaign CSV)');
                 return;
             }
             
@@ -1525,11 +1598,21 @@ gate.decodo.com:7000:user-country-in-city-delhi:password"
                 }
             }
 
-            totalVisits = parseInt(config.repeat);
+            if (hasCsv) {
+                totalVisits = config.csvCampaignRows.reduce((sum, r) => {
+                    return sum + (r.visits.kind === 'value' ? r.visits.value : Math.round((r.visits.min + r.visits.max) / 2));
+                }, 0);
+            } else {
+                totalVisits = parseInt(config.repeat);
+            }
             completedVisits = 0;
 
             updateUI(true);
-            addLog('info', `Starting traffic simulation with ${totalVisits} visits...`);
+            if (hasCsv) {
+                addLog('info', `Starting CSV campaign: ${config.csvCampaignRows.length} URLs, ~${totalVisits} total visits`);
+            } else {
+                addLog('info', `Starting traffic simulation with ${totalVisits} visits...`);
+            }
 
             // Reset and start dashboard
             dashReset();

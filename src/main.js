@@ -14,6 +14,7 @@ const { logger, getCampaignLogDir, cleanOldLogs } = require('./helpers/logger');
 const Constants = require('./helpers/constants');
 const { generateCSV, generateJSON, getExportFilename } = require('./helpers/campaignExport');
 const { setDebugAllTracking, getDebugAllTracking } = require('./core/automaticVisitor');
+const { parseCampaignCsv, CSV_TEMPLATE } = require('./helpers/campaignCsv');
 
 let mainWindow;
 let visitLogic = null;
@@ -77,7 +78,7 @@ ipcMain.handle('start-traffic', async (event, config) => {
         logger.info('Starting traffic simulation with config:', config);
 
         // Parse URL list
-        const urlList = config.campaignLinks
+        const urlList = (config.campaignLinks || '')
             .split('\n')
             .map(url => url.trim())
             .filter(url => url.length > 0);
@@ -87,8 +88,9 @@ ipcMain.handle('start-traffic', async (event, config) => {
             ? config.refererLinks.split('\n').map(url => url.trim()).filter(url => url.length > 0)
             : [''];
 
-        if (urlList.length === 0) {
-            throw new Error('Please enter at least one campaign URL');
+        const hasCsv = Array.isArray(config.csvCampaignRows) && config.csvCampaignRows.length > 0;
+        if (urlList.length === 0 && !hasCsv) {
+            throw new Error('Please enter at least one campaign URL (or load a Campaign CSV)');
         }
 
         visitLogic = new VisitLogic();
@@ -168,7 +170,10 @@ ipcMain.handle('start-traffic', async (event, config) => {
             mixedOrganic: parseInt(config.mixedOrganic) || 35,
             mixedReferral: parseInt(config.mixedReferral) || 20,
             mixedSocial: parseInt(config.mixedSocial) || 20,
-            campaignName: config.campaignName || ''
+            campaignName: config.campaignName || '',
+            // CSV campaign — per-URL ranges, optional. When set, overrides
+            // urlList/visits/bounce/duration/pages.
+            csvCampaignRows: config.csvCampaignRows || null,
         });
 
         return { success: true };
@@ -436,4 +441,53 @@ ipcMain.handle('set-debug-tracking', (event, enabled) => {
 
 ipcMain.handle('get-debug-tracking', () => {
     return getDebugAllTracking();
+});
+
+// ==================== Campaign CSV (per-URL ranges) ====================
+
+/**
+ * Open a campaign CSV, parse it, and return the parsed rows (range specs preserved).
+ * Renderer keeps these in memory and passes them back via start-traffic.
+ */
+ipcMain.handle('load-campaign-csv', async () => {
+    try {
+        const { filePaths } = await dialog.showOpenDialog(mainWindow, {
+            title: 'Load Campaign CSV',
+            filters: [{ name: 'CSV Files', extensions: ['csv'] }],
+            properties: ['openFile'],
+        });
+        if (!filePaths || filePaths.length === 0) {
+            return { success: false, cancelled: true };
+        }
+        const filePath = filePaths[0];
+        const text = fs.readFileSync(filePath, 'utf8');
+        const { rows, errors } = parseCampaignCsv(text);
+        if (errors.length > 0 && rows.length === 0) {
+            return { success: false, error: errors.join('\n'), errors };
+        }
+        logger.info(`Campaign CSV loaded: ${rows.length} URLs from ${filePath} (warnings: ${errors.length})`);
+        return { success: true, path: filePath, rows, errors };
+    } catch (error) {
+        logger.error(`Load campaign CSV failed: ${error.message}`);
+        return { success: false, error: error.message };
+    }
+});
+
+/**
+ * Save a starter CSV template to a user-chosen path.
+ */
+ipcMain.handle('download-campaign-csv-template', async () => {
+    try {
+        const { filePath } = await dialog.showSaveDialog(mainWindow, {
+            title: 'Save Campaign CSV Template',
+            defaultPath: 'campaign-template.csv',
+            filters: [{ name: 'CSV Files', extensions: ['csv'] }],
+        });
+        if (!filePath) return { success: false };
+        fs.writeFileSync(filePath, CSV_TEMPLATE, 'utf8');
+        logger.info(`Campaign CSV template saved to: ${filePath}`);
+        return { success: true, path: filePath };
+    } catch (error) {
+        return { success: false, error: error.message };
+    }
 });

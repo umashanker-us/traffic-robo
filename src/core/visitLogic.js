@@ -17,6 +17,7 @@ const ManualVisitor = require('./manualVisitor');
 const { SessionReplayStore } = require('../helpers/sessionReplay');
 const { resolveTrafficSource } = require('../helpers/trafficSource');
 const { generateCSV } = require('../helpers/campaignExport');
+const { resolveRanges } = require('../helpers/campaignCsv');
 const fs = require('fs');
 const path = require('path');
 
@@ -52,11 +53,13 @@ class VisitLogic {
      * Start traffic simulation
      */
     async start(config) {
-        const {
+        let {
             urlList,
+            repeat = 100,
+        } = config;
+        const {
             refererList = [''],
             isReferer = false,
-            repeat = 100,
             avgSessionDuration = 60,
             bounceRate = 30,
             threads = 5,
@@ -105,7 +108,8 @@ class VisitLogic {
             mixedOrganic = 35,
             mixedReferral = 20,
             mixedSocial = 20,
-            campaignName = ''
+            campaignName = '',
+            csvCampaignRows = null,
         } = config;
 
         // Initialize campaign-specific logging before any log output
@@ -120,13 +124,32 @@ class VisitLogic {
         this.campaignStartTime = new Date().toISOString();
         this.abortController = new AbortController();
 
+        // CSV campaign mode — resolve per-URL ranges and override urlList/repeat
+        // with the sum of per-URL visit counts. Global bounce/duration/pages
+        // become ignored in this mode (each URL has its own).
+        let resolvedCsvRows = null;
+        if (Array.isArray(csvCampaignRows) && csvCampaignRows.length > 0) {
+            resolvedCsvRows = resolveRanges(csvCampaignRows);
+            urlList = resolvedCsvRows.map(r => r.url);
+            repeat = resolvedCsvRows.reduce((sum, r) => sum + r.visits, 0);
+            logger.info(`CSV mode: ${resolvedCsvRows.length} URLs, total visits ${repeat}`);
+            resolvedCsvRows.forEach((r, i) => {
+                logger.info(`  [${i + 1}] ${r.url} → visits=${r.visits} bounce=${r.bounce}% duration=${r.duration}s pages=${r.pages}`);
+            });
+        }
+
         // Validate inputs
         this._validateInputs(urlList, bounceRate, pagePerSession, avgSessionDuration);
 
         // Generate data arrays
         logger.info('Generating visit configurations...');
         const userAgentList = getUserAgentList(userAgentType, 100);
+        // In CSV mode each URL gets its own 100-visit distribution from its own
+        // (bounce, duration, pages); in normal mode there is one shared distribution.
         const visitsList = generateVisitsArray(avgSessionDuration, bounceRate, pagePerSession);
+        const csvVisitsByUrl = resolvedCsvRows
+            ? new Map(resolvedCsvRows.map(r => [r.url, generateVisitsArray(r.duration, r.bounce, r.pages)]))
+            : null;
         // Screens MATCHED to UA (mobile UA → mobile screen, desktop UA → desktop screen)
         const screenSizes = userAgentList.map(ua => getMatchingScreenSize(ua));
         const oldUserFlags = this._generateOldUserFlags(percOldUsers);
@@ -213,6 +236,8 @@ class VisitLogic {
                     memClear,
                     userAgentList,
                     visitsList,
+                    csvVisitsByUrl,
+                    resolvedCsvRows,
                     screenSizes,
                     oldUserFlags,
                     restrictToPrimaryDomain,
@@ -297,6 +322,7 @@ class VisitLogic {
         const {
             urlList, refererList, isReferer, totalBatches, threads,
             threadDelay, memClear, userAgentList, visitsList,
+            csvVisitsByUrl, resolvedCsvRows,
             screenSizes, oldUserFlags, restrictToPrimaryDomain,
             previousURL, useBaseUrlForOldUser, playMode, adsBlock, proxyEnabled, proxyUrl,
             location, extensionEnabled, extensionPath, ipRotation,
@@ -324,164 +350,228 @@ class VisitLogic {
             : [];
         this.queue = queue;  // Store reference for stop()
 
-        for (let batchNum = 0; batchNum < totalBatches; batchNum++) {
-            if (!this.isRunning) break;
+        const baseTaskParams = {
+            trafficSourceConfig, isReferer, threadDelay, memClear,
+            restrictToPrimaryDomain, previousURL, useBaseUrlForOldUser,
+            playMode, adsBlock, proxyEnabled, proxyList, proxyUrl,
+            location, extensionEnabled, extensionPath, ipRotation,
+            fastMode, blockImages, blockMedia, blockFonts, blockStyles, blockScripts,
+        };
 
-            // Shuffle UA+Screen TOGETHER (paired) to maintain alignment
-            const paired = userAgentList.map((ua, idx) => ({ ua, screen: screenSizes[idx] }));
-            const shuffledPairs = shuffleArray(paired);
-            const shuffledUA = shuffledPairs.map(p => p.ua);
-            const shuffledScreens = shuffledPairs.map(p => p.screen);
-            const shuffledVisits = shuffleArray(visitsList);
-            const shuffledOldUser = shuffleArray(oldUserFlags);
-            const shuffledReferers = shuffleArray(refererList);
-
-            for (let i = 0; i < 100; i++) {
+        if (csvVisitsByUrl && resolvedCsvRows) {
+            // CSV mode: iterate per URL, each with its own visit count and visits array
+            let globalVisitIndex = 0;
+            for (const csvRow of resolvedCsvRows) {
                 if (!this.isRunning) break;
 
-                for (const campaignUrl of urlList) {
+                const csvVisits = csvVisitsByUrl.get(csvRow.url);
+                const totalForUrl = csvRow.visits;
+                const batchesForUrl = Math.ceil(totalForUrl / 100);
+                let enqueuedForUrl = 0;
+
+                for (let batchNum = 0; batchNum < batchesForUrl; batchNum++) {
                     if (!this.isRunning) break;
 
-                    const visitIndex = (batchNum * 100) + i + 1;
-                    const legacyReferer = shuffledReferers[i % shuffledReferers.length];
+                    const paired = userAgentList.map((ua, idx) => ({ ua, screen: screenSizes[idx] }));
+                    const shuffledPairs = shuffleArray(paired);
+                    const shuffledUA = shuffledPairs.map(p => p.ua);
+                    const shuffledScreens = shuffledPairs.map(p => p.screen);
+                    const shuffledVisits = shuffleArray(csvVisits);
+                    const shuffledOldUser = shuffleArray(oldUserFlags);
+                    const shuffledReferers = shuffleArray(refererList);
 
-                    queue.add(async () => {
-                        if (!this.isRunning) return;
-
-                        // Add thread delay (except for first visit)
-                        if (visitIndex > 1 && threadDelay > 0) {
-                            await this._delay(threadDelay * 1000);
-                        }
-
-                        if (!this.isRunning) return;
-
-                        // Memory cleanup check
-                        if (memClear >= 10 && visitIndex % memClear === 0) {
-                            logger.info(`Memory cleanup triggered at visit ${visitIndex}`);
-                            if (global.gc) global.gc();
-                        }
-
-                        this._notifyVisitStarted();
-
-                        // Resolve traffic source per visit (new) or use legacy referer
-                        let resolvedReferer, resolvedIsReferer, resolvedVisitReferer, resolvedCampaignUrl;
-                        if (trafficSourceConfig) {
-                            const resolved = resolveTrafficSource(trafficSourceConfig, campaignUrl);
-                            resolvedReferer = resolved.referer;
-                            resolvedIsReferer = resolved.isReferer;
-                            resolvedVisitReferer = resolved.visitReferer;
-                            resolvedCampaignUrl = resolved.campaignUrl;
-                        } else {
-                            resolvedReferer = legacyReferer;
-                            resolvedIsReferer = isReferer;
-                            resolvedVisitReferer = isReferer;  // Legacy mode: visit referer if set
-                            resolvedCampaignUrl = campaignUrl;
-                        }
-
-                        // Force returning flag to NEW while the pool is empty —
-                        // we need at least one completed new-user visit before any returning
-                        // visit can borrow a real _ga cookie.
-                        const poolEmpty = this.cookieJarPool.length === 0;
-                        const effectiveOldUser = poolEmpty ? false : shuffledOldUser[i];
-
-                        if (poolEmpty && shuffledOldUser[i]) {
-                            logger.info(`COOKIE FIX: Visit #${visitIndex} forced to NEW user (cookie pool still empty)`);
-                        }
-
-                        // Pick a random cookie set from the pool for returning users
-                        // so GA4 sees N distinct returning users, not 1 user with N sessions.
-                        let pickedCookies = null;
-                        if (effectiveOldUser) {
-                            if (this.cookieJarPool.length > 0) {
-                                pickedCookies = this.cookieJarPool[Math.floor(Math.random() * this.cookieJarPool.length)];
-                                logger.info(`COOKIE JAR: Injecting cookies for returning visit #${visitIndex} (pool size ${this.cookieJarPool.length})`);
-                            } else {
-                                logger.info(`COOKIE JAR: EMPTY - cannot create returning user!`);
-                            }
-                        }
-
-                        const visitor = new AutomaticVisitor({
-                            campaignUrl: resolvedCampaignUrl,
-                            referer: resolvedReferer,
-                            isReferer: resolvedIsReferer,
-                            visitReferer: resolvedVisitReferer,
+                    const batchLimit = Math.min(100, totalForUrl - enqueuedForUrl);
+                    for (let i = 0; i < batchLimit; i++) {
+                        if (!this.isRunning) break;
+                        enqueuedForUrl++;
+                        globalVisitIndex++;
+                        const visitIndex = globalVisitIndex;
+                        const legacyReferer = shuffledReferers[i % shuffledReferers.length];
+                        const params = {
+                            ...baseTaskParams,
+                            visitIndex,
+                            campaignUrl: csvRow.url,
+                            legacyReferer,
                             userAgent: shuffledUA[i],
-                            threadId: visitIndex,
                             visit: shuffledVisits[i],
                             screenSize: shuffledScreens[i],
-                            isOldUser: effectiveOldUser,
-                            restrictToPrimaryDomain,
-                            previousURL,
-                            useBaseUrlForOldUser,
-                            playMode,
-                            adsBlock,
-                            proxyEnabled,
-                            proxyUrl: proxyList.length > 0
-                                ? proxyList[Math.floor(Math.random() * proxyList.length)]
-                                : proxyUrl,
-                            location,
-                            extensionEnabled,
-                            extensionPath,
-                            ipRotation,
-                            fastMode,
-                            blockImages,
-                            blockMedia,
-                            blockFonts,
-                            blockStyles,
-                            blockScripts,
-                            onProxyStats: (data) => this._notifyProxyStats(data),
-                            onGA4Event: (data) => this._notifyGA4Event(data),
-                            savedCookies: pickedCookies
-                        });
+                            isOldUserFlag: shuffledOldUser[i],
+                        };
+                        queue.add(() => this._executeVisitTask(params));
+                    }
+                }
+            }
+        } else {
+            // Standard mode: shared visits array across all URLs (cross-product)
+            for (let batchNum = 0; batchNum < totalBatches; batchNum++) {
+                if (!this.isRunning) break;
 
-                        // Track active visitor
-                        this.activeVisitors.push(visitor);
+                const paired = userAgentList.map((ua, idx) => ({ ua, screen: screenSizes[idx] }));
+                const shuffledPairs = shuffleArray(paired);
+                const shuffledUA = shuffledPairs.map(p => p.ua);
+                const shuffledScreens = shuffledPairs.map(p => p.screen);
+                const shuffledVisits = shuffleArray(visitsList);
+                const shuffledOldUser = shuffleArray(oldUserFlags);
+                const shuffledReferers = shuffleArray(refererList);
 
-                        try {
-                            await visitor.execute();
-                            // Add unique _ga cookies from NEW users to the pool, up to target size.
-                            // Each pool entry is a distinct client identity → GA4 sees them as
-                            // separate returning users when reused.
-                            if (!effectiveOldUser && this.cookieJarPool.length < this.cookieJarTarget) {
-                                const cookies = visitor.getCookies();
-                                const gaCookie = cookies.find(c => c.name === '_ga');
-                                if (gaCookie) {
-                                    const alreadyPooled = this.cookieJarPool.some(set => {
-                                        const existing = set.find(c => c.name === '_ga');
-                                        return existing && existing.value === gaCookie.value;
-                                    });
-                                    if (!alreadyPooled) {
-                                        this.cookieJarPool.push(cookies);
-                                        // Keep legacy single-cookie reference for any code still reading it
-                                        if (!this.savedGACookies) this.savedGACookies = cookies;
-                                        logger.info(`COOKIE JAR: Added _ga=${gaCookie.value} from visit #${visitIndex} to pool (size now ${this.cookieJarPool.length}/${this.cookieJarTarget})`);
-                                    }
-                                } else {
-                                    logger.warn(`COOKIE JAR: No _ga cookie found in visit #${visitIndex}`);
-                                }
-                            }
-                            this._collectReplay(visitor);
-                            this._collectResult(visitor);
-                            this._notifyVisitCompleted();
-                        } catch (error) {
-                            this._collectReplay(visitor);
-                            this._collectResult(visitor);
-                            if (this.isRunning) {
-                                logger.error(`Visit ${visitIndex} failed: ${error.message}`);
-                            }
-                        } finally {
-                            // Remove from active list
-                            const index = this.activeVisitors.indexOf(visitor);
-                            if (index > -1) {
-                                this.activeVisitors.splice(index, 1);
-                            }
-                        }
-                    });
+                for (let i = 0; i < 100; i++) {
+                    if (!this.isRunning) break;
+
+                    for (const campaignUrl of urlList) {
+                        if (!this.isRunning) break;
+                        const visitIndex = (batchNum * 100) + i + 1;
+                        const legacyReferer = shuffledReferers[i % shuffledReferers.length];
+                        const params = {
+                            ...baseTaskParams,
+                            visitIndex,
+                            campaignUrl,
+                            legacyReferer,
+                            userAgent: shuffledUA[i],
+                            visit: shuffledVisits[i],
+                            screenSize: shuffledScreens[i],
+                            isOldUserFlag: shuffledOldUser[i],
+                        };
+                        queue.add(() => this._executeVisitTask(params));
+                    }
                 }
             }
         }
 
         await queue.onIdle();
+    }
+
+    /**
+     * Execute a single visit task (queue body). Shared between standard and CSV modes.
+     */
+    async _executeVisitTask(params) {
+        const {
+            visitIndex, campaignUrl, legacyReferer,
+            userAgent, visit, screenSize, isOldUserFlag,
+            trafficSourceConfig, isReferer, threadDelay, memClear,
+            restrictToPrimaryDomain, previousURL, useBaseUrlForOldUser,
+            playMode, adsBlock, proxyEnabled, proxyList, proxyUrl,
+            location, extensionEnabled, extensionPath, ipRotation,
+            fastMode, blockImages, blockMedia, blockFonts, blockStyles, blockScripts,
+        } = params;
+
+        if (!this.isRunning) return;
+
+        if (visitIndex > 1 && threadDelay > 0) {
+            await this._delay(threadDelay * 1000);
+        }
+
+        if (!this.isRunning) return;
+
+        if (memClear >= 10 && visitIndex % memClear === 0) {
+            logger.info(`Memory cleanup triggered at visit ${visitIndex}`);
+            if (global.gc) global.gc();
+        }
+
+        this._notifyVisitStarted();
+
+        let resolvedReferer, resolvedIsReferer, resolvedVisitReferer, resolvedCampaignUrl;
+        if (trafficSourceConfig) {
+            const resolved = resolveTrafficSource(trafficSourceConfig, campaignUrl);
+            resolvedReferer = resolved.referer;
+            resolvedIsReferer = resolved.isReferer;
+            resolvedVisitReferer = resolved.visitReferer;
+            resolvedCampaignUrl = resolved.campaignUrl;
+        } else {
+            resolvedReferer = legacyReferer;
+            resolvedIsReferer = isReferer;
+            resolvedVisitReferer = isReferer;
+            resolvedCampaignUrl = campaignUrl;
+        }
+
+        // Force returning flag to NEW while the pool is empty — at least one
+        // completed new-user visit must seed the pool first.
+        const poolEmpty = this.cookieJarPool.length === 0;
+        const effectiveOldUser = poolEmpty ? false : isOldUserFlag;
+
+        if (poolEmpty && isOldUserFlag) {
+            logger.info(`COOKIE FIX: Visit #${visitIndex} forced to NEW user (cookie pool still empty)`);
+        }
+
+        let pickedCookies = null;
+        if (effectiveOldUser) {
+            if (this.cookieJarPool.length > 0) {
+                pickedCookies = this.cookieJarPool[Math.floor(Math.random() * this.cookieJarPool.length)];
+                logger.info(`COOKIE JAR: Injecting cookies for returning visit #${visitIndex} (pool size ${this.cookieJarPool.length})`);
+            } else {
+                logger.info(`COOKIE JAR: EMPTY - cannot create returning user!`);
+            }
+        }
+
+        const visitor = new AutomaticVisitor({
+            campaignUrl: resolvedCampaignUrl,
+            referer: resolvedReferer,
+            isReferer: resolvedIsReferer,
+            visitReferer: resolvedVisitReferer,
+            userAgent,
+            threadId: visitIndex,
+            visit,
+            screenSize,
+            isOldUser: effectiveOldUser,
+            restrictToPrimaryDomain,
+            previousURL,
+            useBaseUrlForOldUser,
+            playMode,
+            adsBlock,
+            proxyEnabled,
+            proxyUrl: proxyList.length > 0
+                ? proxyList[Math.floor(Math.random() * proxyList.length)]
+                : proxyUrl,
+            location,
+            extensionEnabled,
+            extensionPath,
+            ipRotation,
+            fastMode,
+            blockImages,
+            blockMedia,
+            blockFonts,
+            blockStyles,
+            blockScripts,
+            onProxyStats: (data) => this._notifyProxyStats(data),
+            onGA4Event: (data) => this._notifyGA4Event(data),
+            savedCookies: pickedCookies,
+        });
+
+        this.activeVisitors.push(visitor);
+
+        try {
+            await visitor.execute();
+            if (!effectiveOldUser && this.cookieJarPool.length < this.cookieJarTarget) {
+                const cookies = visitor.getCookies();
+                const gaCookie = cookies.find(c => c.name === '_ga');
+                if (gaCookie) {
+                    const alreadyPooled = this.cookieJarPool.some(set => {
+                        const existing = set.find(c => c.name === '_ga');
+                        return existing && existing.value === gaCookie.value;
+                    });
+                    if (!alreadyPooled) {
+                        this.cookieJarPool.push(cookies);
+                        if (!this.savedGACookies) this.savedGACookies = cookies;
+                        logger.info(`COOKIE JAR: Added _ga=${gaCookie.value} from visit #${visitIndex} to pool (size now ${this.cookieJarPool.length}/${this.cookieJarTarget})`);
+                    }
+                } else {
+                    logger.warn(`COOKIE JAR: No _ga cookie found in visit #${visitIndex}`);
+                }
+            }
+            this._collectReplay(visitor);
+            this._collectResult(visitor);
+            this._notifyVisitCompleted();
+        } catch (error) {
+            this._collectReplay(visitor);
+            this._collectResult(visitor);
+            if (this.isRunning) {
+                logger.error(`Visit ${visitIndex} failed: ${error.message}`);
+            }
+        } finally {
+            const index = this.activeVisitors.indexOf(visitor);
+            if (index > -1) {
+                this.activeVisitors.splice(index, 1);
+            }
+        }
     }
 
     /**
