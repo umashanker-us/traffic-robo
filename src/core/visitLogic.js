@@ -282,14 +282,30 @@ class VisitLogic {
                     threadDelay,
                     memClear,
                     userAgentList,
+                    visitsList,
+                    csvVisitsByUrl,
+                    resolvedCsvRows,
                     screenSizes,
+                    oldUserFlags,
+                    restrictToPrimaryDomain,
+                    previousURL,
+                    useBaseUrlForOldUser,
+                    avgSessionDuration,
                     playMode,
                     adsBlock,
                     inputCommands,
                     location,
                     extensionEnabled,
                     extensionPath,
-                    resolvedCsvRows,
+                    proxyEnabled,
+                    proxyUrl,
+                    ipRotation,
+                    fastMode,
+                    blockImages,
+                    blockMedia,
+                    blockFonts,
+                    blockStyles,
+                    blockScripts,
                     trafficSourceType,
                     searchEngine,
                     searchKeywords,
@@ -603,8 +619,13 @@ class VisitLogic {
         const {
             urlList, refererList, isReferer, totalBatches, threads,
             threadDelay, memClear, userAgentList, screenSizes,
+            visitsList, csvVisitsByUrl, resolvedCsvRows,
+            oldUserFlags, restrictToPrimaryDomain, previousURL, useBaseUrlForOldUser,
+            avgSessionDuration,
             playMode, adsBlock, inputCommands, location,
-            extensionEnabled, extensionPath, resolvedCsvRows,
+            extensionEnabled, extensionPath,
+            proxyEnabled, proxyUrl, ipRotation,
+            fastMode, blockImages, blockMedia, blockFonts, blockStyles, blockScripts,
             trafficSourceType, searchEngine, searchKeywords, referralUrls,
             socialPlatforms, utmSource, utmMedium, utmCampaign, utmTerm, utmContent,
             mixedDirect, mixedOrganic, mixedReferral, mixedSocial,
@@ -612,6 +633,18 @@ class VisitLogic {
 
         const queue = await this._createQueue(threads);
         this.queue = queue;  // Store reference for stop()
+
+        // Defaults for backward-compat / tests that omit these
+        const safeOldUserFlags = Array.isArray(oldUserFlags) ? oldUserFlags : Array(100).fill(false);
+
+        // Parse proxy list (one per line, random rotation per visit)
+        let proxyList = [];
+        if (proxyEnabled && proxyUrl) {
+            proxyList = proxyUrl
+                .split(/[\n]+/)
+                .map(s => s.trim())
+                .filter(s => s.length > 0 && !s.startsWith('#'));
+        }
 
         const trafficSourceConfig = trafficSourceType ? {
             trafficSourceType, searchEngine, searchKeywords,
@@ -625,6 +658,19 @@ class VisitLogic {
             playMode, adsBlock, inputCommands, location,
             extensionEnabled, extensionPath,
             trafficSourceConfig,
+            proxyEnabled: !!proxyEnabled,
+            proxyList,
+            ipRotation: !!ipRotation,
+            fastMode: !!fastMode,
+            blockImages: !!blockImages,
+            blockMedia: !!blockMedia,
+            blockFonts: !!blockFonts,
+            blockStyles: !!blockStyles,
+            blockScripts: !!blockScripts,
+            restrictToPrimaryDomain: !!restrictToPrimaryDomain,
+            previousURL,
+            useBaseUrlForOldUser: !!useBaseUrlForOldUser,
+            avgSessionDuration,
         };
 
         if (Array.isArray(resolvedCsvRows) && resolvedCsvRows.length > 0) {
@@ -645,6 +691,7 @@ class VisitLogic {
                     const shuffledUA = shuffledPairs.map(p => p.ua);
                     const shuffledScreens = shuffledPairs.map(p => p.screen);
                     const shuffledReferers = shuffleArray(refererList);
+                    const shuffledOldUser = shuffleArray(safeOldUserFlags);
 
                     const batchLimit = Math.min(100, totalForUrl - enqueuedForUrl);
                     for (let i = 0; i < batchLimit; i++) {
@@ -658,6 +705,7 @@ class VisitLogic {
                             referer: shuffledReferers[i % shuffledReferers.length],
                             userAgent: shuffledUA[i],
                             screenSize: shuffledScreens[i],
+                            isOldUserFlag: shuffledOldUser[i],
                         };
                         queue.add(() => this._executeManualTask(params));
                     }
@@ -672,6 +720,7 @@ class VisitLogic {
                 const shuffledUA = shuffledPairsM.map(p => p.ua);
                 const shuffledScreens = shuffledPairsM.map(p => p.screen);
                 const shuffledReferers = shuffleArray(refererList);
+                const shuffledOldUser = shuffleArray(safeOldUserFlags);
 
                 for (let i = 0; i < 100; i++) {
                     if (!this.isRunning) break;
@@ -686,6 +735,7 @@ class VisitLogic {
                             referer: shuffledReferers[i % shuffledReferers.length],
                             userAgent: shuffledUA[i],
                             screenSize: shuffledScreens[i],
+                            isOldUserFlag: shuffledOldUser[i],
                         };
                         queue.add(() => this._executeManualTask(params));
                     }
@@ -706,6 +756,10 @@ class VisitLogic {
             playMode, adsBlock, inputCommands, location,
             extensionEnabled, extensionPath,
             trafficSourceConfig,
+            proxyEnabled, proxyList, ipRotation,
+            fastMode, blockImages, blockMedia, blockFonts, blockStyles, blockScripts,
+            restrictToPrimaryDomain, previousURL, useBaseUrlForOldUser, avgSessionDuration,
+            isOldUserFlag,
         } = params;
 
         if (!this.isRunning) return;
@@ -737,6 +791,19 @@ class VisitLogic {
             resolvedVisitReferer = r.visitReferer;
         }
 
+        // Returning-user cookie injection — force NEW until pool seeded
+        const poolEmpty = this.cookieJarPool.length === 0;
+        const effectiveOldUser = poolEmpty ? false : !!isOldUserFlag;
+        let pickedCookies = null;
+        if (effectiveOldUser && this.cookieJarPool.length > 0) {
+            pickedCookies = this.cookieJarPool[Math.floor(Math.random() * this.cookieJarPool.length)];
+            logger.info(`COOKIE JAR (manual): Injecting cookies for returning visit #${visitIndex} (pool size ${this.cookieJarPool.length})`);
+        }
+
+        const pickedProxyUrl = (Array.isArray(proxyList) && proxyList.length > 0)
+            ? proxyList[Math.floor(Math.random() * proxyList.length)]
+            : '';
+
         const visitor = new ManualVisitor({
             url: resolvedUrl,
             referer: resolvedReferer,
@@ -751,12 +818,41 @@ class VisitLogic {
             location,
             extensionEnabled,
             extensionPath,
+            // Browser-level features ported from automatic mode
+            proxyEnabled: !!proxyEnabled,
+            proxyUrl: pickedProxyUrl,
+            ipRotation: !!ipRotation,
+            fastMode: !!fastMode,
+            blockImages, blockMedia, blockFonts, blockStyles, blockScripts,
+            // Returning-user features
+            isOldUser: effectiveOldUser,
+            savedCookies: pickedCookies,
+            previousURL,
+            useBaseUrlForOldUser: !!useBaseUrlForOldUser,
+            // Misc
+            restrictToPrimaryDomain: !!restrictToPrimaryDomain,
+            avgSessionDuration,
         });
 
         this.activeVisitors.push(visitor);
 
         try {
             await visitor.execute();
+            // Seed cookie pool from new-user visits (same gate as automatic mode)
+            if (!effectiveOldUser && this.cookieJarPool.length < this.cookieJarTarget && typeof visitor.getCookies === 'function') {
+                const cookies = visitor.getCookies();
+                const gaCookie = cookies.find(c => c.name === '_ga');
+                if (gaCookie) {
+                    const alreadyPooled = this.cookieJarPool.some(set => {
+                        const existing = set.find(c => c.name === '_ga');
+                        return existing && existing.value === gaCookie.value;
+                    });
+                    if (!alreadyPooled) {
+                        this.cookieJarPool.push(cookies);
+                        logger.info(`COOKIE JAR (manual): Added _ga=${gaCookie.value} from visit #${visitIndex} (size ${this.cookieJarPool.length}/${this.cookieJarTarget})`);
+                    }
+                }
+            }
             this._collectReplay(visitor);
             this._collectResult(visitor);
             this._notifyVisitCompleted();

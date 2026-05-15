@@ -27,6 +27,7 @@ const Constants = require('../helpers/constants');
 const { ProxyRouter, isGACollectRequest, isGAScript, createPlaywrightProxy, parseProxyString } = require('../helpers/proxyRouter');
 const { generateIndianIP } = require('../helpers/indianIP');
 const { SessionReplay } = require('../helpers/sessionReplay');
+const { patchCollectUrlForReturning } = require('../helpers/collectPatch');
 
 // ===== Debug All Tracking Pixels Toggle =====
 let debugAllTracking = false;
@@ -57,50 +58,7 @@ function getDebugAllTracking() {
     return debugAllTracking;
 }
 
-/**
- * Patch /collect URL for returning users:
- * - Remove _fv=1 or _fv=2 (first_visit marker)
- * - Change sct=1 → sct=2 (session count)
- * - Change _nsi=1 → _nsi=0 (new session indicator)
- * - Change seg=0 → seg=1 (session engaged)
- * Returns null if no changes needed.
- */
-function patchCollectUrlForReturning(url) {
-    let modified = url;
-    let changed = false;
-
-    // Remove _fv parameter (first_visit event trigger)
-    const fvMatch = modified.match(/([?&])_fv=[^&]*/);
-    if (fvMatch) {
-        modified = modified.replace(/([?&])_fv=[^&]*/, (match, prefix) => {
-            // If it was the first param after ?, keep ? for next param
-            return match.startsWith('?') ? '?' : '';
-        });
-        // Clean up leading & after ? (e.g. ?&foo → ?foo)
-        modified = modified.replace('?&', '?');
-        changed = true;
-    }
-
-    // sct=1 → sct=2
-    if (/[?&]sct=1(&|$)/.test(modified)) {
-        modified = modified.replace(/([?&]sct=)1(&|$)/, '$12$2');
-        changed = true;
-    }
-
-    // _nsi=1 → _nsi=0
-    if (/[?&]_nsi=1(&|$)/.test(modified)) {
-        modified = modified.replace(/([?&]_nsi=)1(&|$)/, '$10$2');
-        changed = true;
-    }
-
-    // seg=0 → seg=1
-    if (/[?&]seg=0(&|$)/.test(modified)) {
-        modified = modified.replace(/([?&]seg=)0(&|$)/, '$11$2');
-        changed = true;
-    }
-
-    return changed ? modified : null;
-}
+// patchCollectUrlForReturning moved to ../helpers/collectPatch (shared with ManualVisitor).
 
 class AutomaticVisitor {
     constructor(config) {
