@@ -217,6 +217,41 @@
         .csv-status-icon { font-size: 14px; line-height: 1; }
         .csv-status-text { flex: 1; }
 
+        /* ===== SCHEDULE ===== */
+        .schedule-box {
+            margin-bottom: 14px;
+            padding: 12px 14px;
+            background: var(--bg-input);
+            border: 1px solid var(--border);
+            border-left: 3px solid #f59e0b;
+            border-radius: 8px;
+        }
+        .schedule-box.armed { border-left-color: var(--success); }
+        .schedule-header {
+            display: flex; align-items: center; gap: 8px;
+            margin-bottom: 6px;
+        }
+        .schedule-title { font-size: 13px; font-weight: 600; color: var(--text); }
+        .schedule-row {
+            display: flex; gap: 10px; flex-wrap: wrap; align-items: center;
+            margin-bottom: 10px;
+        }
+        .schedule-input {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 6px 10px;
+            color: var(--text);
+            font-size: 12px;
+            font-family: inherit;
+        }
+        .schedule-countdown {
+            font-family: monospace;
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--success);
+        }
+
         /* ===== STATUS BAR ===== */
         .status-bar {
             display: flex;
@@ -634,6 +669,31 @@
                         <div id="csvCampaignStatus" class="csv-campaign-status">
                             <span class="csv-status-icon">○</span>
                             <span class="csv-status-text">No CSV loaded — using URL list above.</span>
+                        </div>
+                    </div>
+
+                    <div class="schedule-box" id="scheduleBox">
+                        <div class="schedule-header">
+                            <span class="schedule-title">🕒 Schedule Start</span>
+                            <span class="csv-campaign-badge">Optional</span>
+                        </div>
+                        <div class="csv-campaign-desc">
+                            Pick a date+time and the campaign will auto-start at that moment.
+                            App must stay open. Enable <strong>Repeat daily</strong> to fire every day at the same time.
+                        </div>
+                        <div class="schedule-row">
+                            <input type="datetime-local" id="scheduleAt" class="schedule-input">
+                            <label class="checkbox-label" style="margin:0;display:flex;align-items:center;gap:6px;">
+                                <input type="checkbox" id="scheduleRepeatDaily"> Repeat daily
+                            </label>
+                        </div>
+                        <div class="csv-campaign-actions">
+                            <button type="button" class="btn btn-secondary btn-sm" onclick="armSchedule()">⏰ Arm Schedule</button>
+                            <button type="button" class="btn btn-secondary btn-sm" onclick="cancelSchedule()">✖ Cancel</button>
+                        </div>
+                        <div id="scheduleStatus" class="csv-campaign-status">
+                            <span class="csv-status-icon">○</span>
+                            <span class="csv-status-text">No schedule set.</span>
                         </div>
                     </div>
 
@@ -1378,6 +1438,132 @@ gate.decodo.com:7000:user-country-in-city-delhi:password"
             addLog('info', 'Campaign CSV cleared');
         }
 
+        // ===== Scheduler =====
+        let scheduleTimer = null;
+        let scheduleCountdownInterval = null;
+        let scheduleFireAt = null; // ms epoch
+
+        function setScheduleStatus(state, icon, text) {
+            const box = document.getElementById('scheduleBox');
+            const el = document.getElementById('scheduleStatus');
+            el.className = 'csv-campaign-status' + (state ? ' ' + state : '');
+            box.classList.toggle('armed', state === 'loaded');
+            el.querySelector('.csv-status-icon').textContent = icon;
+            el.querySelector('.csv-status-text').innerHTML = text;
+        }
+
+        function formatCountdown(ms) {
+            if (ms <= 0) return '00:00:00';
+            const s = Math.floor(ms / 1000);
+            const h = Math.floor(s / 3600);
+            const m = Math.floor((s % 3600) / 60);
+            const sec = s % 60;
+            const pad = n => String(n).padStart(2, '0');
+            if (h >= 24) {
+                const days = Math.floor(h / 24);
+                return `${days}d ${pad(h % 24)}:${pad(m)}:${pad(sec)}`;
+            }
+            return `${pad(h)}:${pad(m)}:${pad(sec)}`;
+        }
+
+        function startCountdownTick() {
+            stopCountdownTick();
+            const tick = () => {
+                if (!scheduleFireAt) return;
+                const remaining = scheduleFireAt - Date.now();
+                const fireStr = new Date(scheduleFireAt).toLocaleString();
+                const repeatStr = document.getElementById('scheduleRepeatDaily').checked ? ' · 🔁 daily' : '';
+                setScheduleStatus('loaded', '✓',
+                    `Starts in <span class="schedule-countdown">${formatCountdown(remaining)}</span> · ${fireStr}${repeatStr}`);
+            };
+            tick();
+            scheduleCountdownInterval = setInterval(tick, 1000);
+        }
+
+        function stopCountdownTick() {
+            if (scheduleCountdownInterval) {
+                clearInterval(scheduleCountdownInterval);
+                scheduleCountdownInterval = null;
+            }
+        }
+
+        function armScheduleAt(fireAtMs) {
+            cancelSchedule(true); // silent cancel of prior
+
+            const delay = fireAtMs - Date.now();
+            if (delay <= 0) {
+                alert('Schedule time must be in the future.');
+                return false;
+            }
+            // setTimeout max safe value is ~24.8 days; clamp to be safe
+            const MAX_DELAY = 2147483000;
+            if (delay > MAX_DELAY) {
+                alert('Schedule cannot be more than 24 days away.');
+                return false;
+            }
+
+            scheduleFireAt = fireAtMs;
+            scheduleTimer = setTimeout(onScheduleFire, delay);
+            startCountdownTick();
+            return true;
+        }
+
+        function armSchedule() {
+            const v = document.getElementById('scheduleAt').value;
+            if (!v) {
+                alert('Please pick a date and time first.');
+                return;
+            }
+            const fireAtMs = new Date(v).getTime();
+            if (!Number.isFinite(fireAtMs)) {
+                alert('Invalid date/time.');
+                return;
+            }
+            if (armScheduleAt(fireAtMs)) {
+                addLog('info', `⏰ Schedule armed for ${new Date(fireAtMs).toLocaleString()}`);
+            }
+        }
+
+        function cancelSchedule(silent) {
+            if (scheduleTimer) {
+                clearTimeout(scheduleTimer);
+                scheduleTimer = null;
+            }
+            stopCountdownTick();
+            scheduleFireAt = null;
+            setScheduleStatus('', '○', 'No schedule set.');
+            if (!silent) addLog('info', '⏰ Schedule cancelled');
+        }
+
+        async function onScheduleFire() {
+            const repeatDaily = document.getElementById('scheduleRepeatDaily').checked;
+            const firedAt = scheduleFireAt;
+            scheduleTimer = null;
+            stopCountdownTick();
+            scheduleFireAt = null;
+
+            addLog('info', `⏰ Scheduled time reached — starting campaign`);
+            setScheduleStatus('loaded', '▶', `Fired at ${new Date(firedAt).toLocaleString()} — campaign running`);
+
+            // Re-arm for tomorrow BEFORE starting (so the daily re-arm survives long runs)
+            if (repeatDaily) {
+                const nextFire = firedAt + 24 * 60 * 60 * 1000;
+                armScheduleAt(nextFire);
+                addLog('info', `⏰ Re-armed for tomorrow: ${new Date(nextFire).toLocaleString()}`);
+            }
+
+            // Don't start a second run if one is already going
+            if (document.getElementById('stopBtn').disabled === false) {
+                addLog('warning', 'Campaign already running — schedule fire skipped');
+                return;
+            }
+            try {
+                await startTraffic();
+            } catch (e) {
+                addLog('error', 'Scheduled start failed: ' + e.message);
+            }
+        }
+
         function getConfig() {
             return {
                 campaignName: document.getElementById('campaignName').value,
@@ -1432,7 +1618,10 @@ gate.decodo.com:7000:user-country-in-city-delhi:password"
                 mixedDirect: document.getElementById('mixedDirect').value,
                 mixedOrganic: document.getElementById('mixedOrganic').value,
                 mixedReferral: document.getElementById('mixedReferral').value,
-                mixedSocial: document.getElementById('mixedSocial').value
+                mixedSocial: document.getElementById('mixedSocial').value,
+                // Scheduler
+                scheduleAt: document.getElementById('scheduleAt').value,
+                scheduleRepeatDaily: document.getElementById('scheduleRepeatDaily').checked
             };
         }
 
@@ -1521,6 +1710,17 @@ gate.decodo.com:7000:user-country-in-city-delhi:password"
             if (config.mixedOrganic !== undefined) document.getElementById('mixedOrganic').value = config.mixedOrganic;
             if (config.mixedReferral !== undefined) document.getElementById('mixedReferral').value = config.mixedReferral;
             if (config.mixedSocial !== undefined) document.getElementById('mixedSocial').value = config.mixedSocial;
+            // Scheduler — restore and auto-arm if still in the future
+            if (config.scheduleRepeatDaily !== undefined) {
+                document.getElementById('scheduleRepeatDaily').checked = config.scheduleRepeatDaily;
+            }
+            if (config.scheduleAt) {
+                document.getElementById('scheduleAt').value = config.scheduleAt;
+                const savedMs = new Date(config.scheduleAt).getTime();
+                if (!Number.isNaN(savedMs) && savedMs > Date.now()) {
+                    armScheduleAt(savedMs);
+                }
+            }
         }
 
         // Toggle proxy settings visibility
