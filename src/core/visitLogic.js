@@ -36,7 +36,9 @@ class VisitLogic {
         this.campaignConfig = null; // Store config for export metadata
         this.campaignStartTime = null;
         this.campaignLogDir = null; // Campaign-specific log directory
-        this.savedGACookies = null; // GA cookies from first visit for returning users
+        this.savedGACookies = null; // GA cookies from first visit for returning users (legacy)
+        this.cookieJarPool = []; // Pool of distinct _ga cookies from new visits — returning visits pick randomly so GA4 sees N returning users, not 1
+        this.cookieJarTarget = 20; // Stop collecting once pool reaches this size
     }
 
     /**
@@ -376,19 +378,23 @@ class VisitLogic {
                             resolvedCampaignUrl = campaignUrl;
                         }
 
-                        // Force first batch to be new users — cookie jar is empty until
-                        // at least one visit completes and saves its GA cookies.
-                        const isFirstBatch = visitIndex <= threads;
-                        const effectiveOldUser = isFirstBatch ? false : shuffledOldUser[i];
+                        // Force returning flag to NEW while the pool is empty —
+                        // we need at least one completed new-user visit before any returning
+                        // visit can borrow a real _ga cookie.
+                        const poolEmpty = this.cookieJarPool.length === 0;
+                        const effectiveOldUser = poolEmpty ? false : shuffledOldUser[i];
 
-                        if (isFirstBatch && shuffledOldUser[i]) {
-                            logger.info(`COOKIE FIX: Visit #${visitIndex} forced to NEW user (first batch, cookie jar not yet populated)`);
+                        if (poolEmpty && shuffledOldUser[i]) {
+                            logger.info(`COOKIE FIX: Visit #${visitIndex} forced to NEW user (cookie pool still empty)`);
                         }
 
-                        // Cookie jar debug logging
+                        // Pick a random cookie set from the pool for returning users
+                        // so GA4 sees N distinct returning users, not 1 user with N sessions.
+                        let pickedCookies = null;
                         if (effectiveOldUser) {
-                            if (this.savedGACookies && this.savedGACookies.length > 0) {
-                                logger.info(`COOKIE JAR: Injecting cookies for returning visit #${visitIndex}`);
+                            if (this.cookieJarPool.length > 0) {
+                                pickedCookies = this.cookieJarPool[Math.floor(Math.random() * this.cookieJarPool.length)];
+                                logger.info(`COOKIE JAR: Injecting cookies for returning visit #${visitIndex} (pool size ${this.cookieJarPool.length})`);
                             } else {
                                 logger.info(`COOKIE JAR: EMPTY - cannot create returning user!`);
                             }
@@ -425,7 +431,7 @@ class VisitLogic {
                             blockScripts,
                             onProxyStats: (data) => this._notifyProxyStats(data),
                             onGA4Event: (data) => this._notifyGA4Event(data),
-                            savedCookies: effectiveOldUser ? this.savedGACookies : null
+                            savedCookies: pickedCookies
                         });
 
                         // Track active visitor
@@ -433,14 +439,25 @@ class VisitLogic {
 
                         try {
                             await visitor.execute();
-                            if (!this.savedGACookies) {
+                            // Add unique _ga cookies from NEW users to the pool, up to target size.
+                            // Each pool entry is a distinct client identity → GA4 sees them as
+                            // separate returning users when reused.
+                            if (!effectiveOldUser && this.cookieJarPool.length < this.cookieJarTarget) {
                                 const cookies = visitor.getCookies();
-                                logger.info(`COOKIE JAR: getCookies() returned ${cookies.length} cookies from visit #${visitIndex}`);
-                                if (cookies.length > 0) {
-                                    this.savedGACookies = cookies;
-                                    logger.info(`COOKIE JAR: Saved ${this.savedGACookies.length} cookies for returning users`);
+                                const gaCookie = cookies.find(c => c.name === '_ga');
+                                if (gaCookie) {
+                                    const alreadyPooled = this.cookieJarPool.some(set => {
+                                        const existing = set.find(c => c.name === '_ga');
+                                        return existing && existing.value === gaCookie.value;
+                                    });
+                                    if (!alreadyPooled) {
+                                        this.cookieJarPool.push(cookies);
+                                        // Keep legacy single-cookie reference for any code still reading it
+                                        if (!this.savedGACookies) this.savedGACookies = cookies;
+                                        logger.info(`COOKIE JAR: Added _ga=${gaCookie.value} from visit #${visitIndex} to pool (size now ${this.cookieJarPool.length}/${this.cookieJarTarget})`);
+                                    }
                                 } else {
-                                    logger.warn(`COOKIE JAR: No GA cookies found in visit #${visitIndex} — returning users will not work`);
+                                    logger.warn(`COOKIE JAR: No _ga cookie found in visit #${visitIndex}`);
                                 }
                             }
                             this._collectReplay(visitor);

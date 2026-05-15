@@ -1374,9 +1374,12 @@ class AutomaticVisitor {
         try {
             this.logger.info(`COOKIE EXTRACT: Extracting cookies before context close...`);
             const all = await this.context.cookies();
-            const gaCookies = all.filter(c => c.name.startsWith('_ga') || c.name.startsWith('_gid') || c.name.startsWith('_gat'));
+            // Only save _ga (client ID). Skip _ga_<MEASUREMENT_ID> session cookie and _gid —
+            // injecting an old session cookie makes gtag.js continue the old session instead
+            // of starting a fresh one, so GA4 never registers a new returning-user session.
+            const gaCookies = all.filter(c => c.name === '_ga');
             this._extractedCookies = gaCookies;
-            this.logger.info(`COOKIE EXTRACT: Found ${all.length} total cookies, ${gaCookies.length} GA cookies`);
+            this.logger.info(`COOKIE EXTRACT: Found ${all.length} total cookies, ${gaCookies.length} _ga cookies (client ID only)`);
             for (const c of gaCookies) {
                 const expires = c.expires ? new Date(c.expires * 1000).toISOString() : 'session';
                 this.logger.info(`  SEED: ${c.name}=${c.value} | domain=${c.domain} path=${c.path} expires=${expires} secure=${c.secure} sameSite=${c.sameSite}`);
