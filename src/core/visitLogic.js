@@ -288,7 +288,8 @@ class VisitLogic {
                     inputCommands,
                     location,
                     extensionEnabled,
-                    extensionPath
+                    extensionPath,
+                    resolvedCsvRows,
                 });
             }
 
@@ -313,6 +314,14 @@ class VisitLogic {
             this.isRunning = false;
             closeCampaignLogger();
         }
+    }
+
+    /**
+     * Create the PQueue. Extracted so tests can stub it via a sync fake.
+     */
+    async _createQueue(concurrency) {
+        const PQueue = (await import('p-queue')).default;
+        return new PQueue({ concurrency });
     }
 
     /**
@@ -341,8 +350,7 @@ class VisitLogic {
             mixedDirect, mixedOrganic, mixedReferral, mixedSocial
         } : null;
 
-        const PQueue = (await import('p-queue')).default;
-        const queue = new PQueue({ concurrency: threads });
+        const queue = await this._createQueue(threads);
 
         // Build proxy list for random rotation
         const proxyList = (proxyEnabled && proxyUrl)
@@ -582,89 +590,147 @@ class VisitLogic {
             urlList, refererList, isReferer, totalBatches, threads,
             threadDelay, memClear, userAgentList, screenSizes,
             playMode, adsBlock, inputCommands, location,
-            extensionEnabled, extensionPath
+            extensionEnabled, extensionPath, resolvedCsvRows,
         } = config;
 
-        const PQueue = (await import('p-queue')).default;
-        const queue = new PQueue({ concurrency: threads });
+        const queue = await this._createQueue(threads);
         this.queue = queue;  // Store reference for stop()
 
-        for (let batchNum = 0; batchNum < totalBatches; batchNum++) {
-            if (!this.isRunning) break;
+        const baseTaskParams = {
+            isReferer, threadDelay, memClear,
+            playMode, adsBlock, inputCommands, location,
+            extensionEnabled, extensionPath,
+        };
 
-            const pairedM = userAgentList.map((ua, idx) => ({ ua, screen: screenSizes[idx] }));
-            const shuffledPairsM = shuffleArray(pairedM);
-            const shuffledUA = shuffledPairsM.map(p => p.ua);
-            const shuffledScreens = shuffledPairsM.map(p => p.screen);
-            const shuffledReferers = shuffleArray(refererList);
-
-            for (let i = 0; i < 100; i++) {
+        if (Array.isArray(resolvedCsvRows) && resolvedCsvRows.length > 0) {
+            // CSV mode: per-URL visit counts. bounce/duration/pages are not
+            // meaningful in manual mode (commands run instead) — only `visits` is used.
+            let globalVisitIndex = 0;
+            for (const csvRow of resolvedCsvRows) {
                 if (!this.isRunning) break;
+                const totalForUrl = csvRow.visits;
+                const batchesForUrl = Math.ceil(totalForUrl / 100);
+                let enqueuedForUrl = 0;
 
-                for (const url of urlList) {
+                for (let batchNum = 0; batchNum < batchesForUrl; batchNum++) {
                     if (!this.isRunning) break;
 
-                    const visitIndex = (batchNum * 100) + i + 1;
-                    const referer = shuffledReferers[i % shuffledReferers.length];
+                    const paired = userAgentList.map((ua, idx) => ({ ua, screen: screenSizes[idx] }));
+                    const shuffledPairs = shuffleArray(paired);
+                    const shuffledUA = shuffledPairs.map(p => p.ua);
+                    const shuffledScreens = shuffledPairs.map(p => p.screen);
+                    const shuffledReferers = shuffleArray(refererList);
 
-                    queue.add(async () => {
-                        if (!this.isRunning) return;
-
-                        if (visitIndex > 1 && threadDelay > 0) {
-                            await this._delay(threadDelay * 1000);
-                        }
-                        
-                        if (!this.isRunning) return;
-
-                        if (memClear >= 10 && visitIndex % memClear === 0) {
-                            logger.info(`Memory cleanup triggered at visit ${visitIndex}`);
-                            if (global.gc) global.gc();
-                        }
-
-                        this._notifyVisitStarted();
-
-                        const visitor = new ManualVisitor({
-                            url,
-                            referer,
-                            isReferer,
+                    const batchLimit = Math.min(100, totalForUrl - enqueuedForUrl);
+                    for (let i = 0; i < batchLimit; i++) {
+                        if (!this.isRunning) break;
+                        enqueuedForUrl++;
+                        globalVisitIndex++;
+                        const params = {
+                            ...baseTaskParams,
+                            visitIndex: globalVisitIndex,
+                            url: csvRow.url,
+                            referer: shuffledReferers[i % shuffledReferers.length],
                             userAgent: shuffledUA[i],
-                            threadId: visitIndex,
                             screenSize: shuffledScreens[i],
-                            playMode,
-                            adsBlock,
-                            commands: inputCommands,
-                            location,
-                            extensionEnabled,
-                            extensionPath
-                        });
+                        };
+                        queue.add(() => this._executeManualTask(params));
+                    }
+                }
+            }
+        } else {
+            for (let batchNum = 0; batchNum < totalBatches; batchNum++) {
+                if (!this.isRunning) break;
 
-                        // Track active visitor
-                        this.activeVisitors.push(visitor);
+                const pairedM = userAgentList.map((ua, idx) => ({ ua, screen: screenSizes[idx] }));
+                const shuffledPairsM = shuffleArray(pairedM);
+                const shuffledUA = shuffledPairsM.map(p => p.ua);
+                const shuffledScreens = shuffledPairsM.map(p => p.screen);
+                const shuffledReferers = shuffleArray(refererList);
 
-                        try {
-                            await visitor.execute();
-                            this._collectReplay(visitor);
-                            this._collectResult(visitor);
-                            this._notifyVisitCompleted();
-                        } catch (error) {
-                            this._collectReplay(visitor);
-                            this._collectResult(visitor);
-                            if (this.isRunning) {
-                                logger.error(`Visit ${visitIndex} failed: ${error.message}`);
-                            }
-                        } finally {
-                            // Remove from active list
-                            const index = this.activeVisitors.indexOf(visitor);
-                            if (index > -1) {
-                                this.activeVisitors.splice(index, 1);
-                            }
-                        }
-                    });
+                for (let i = 0; i < 100; i++) {
+                    if (!this.isRunning) break;
+
+                    for (const url of urlList) {
+                        if (!this.isRunning) break;
+                        const visitIndex = (batchNum * 100) + i + 1;
+                        const params = {
+                            ...baseTaskParams,
+                            visitIndex,
+                            url,
+                            referer: shuffledReferers[i % shuffledReferers.length],
+                            userAgent: shuffledUA[i],
+                            screenSize: shuffledScreens[i],
+                        };
+                        queue.add(() => this._executeManualTask(params));
+                    }
                 }
             }
         }
 
         await queue.onIdle();
+    }
+
+    /**
+     * Execute a single manual visit task (queue body). Shared between standard and CSV modes.
+     */
+    async _executeManualTask(params) {
+        const {
+            visitIndex, url, referer, userAgent, screenSize,
+            isReferer, threadDelay, memClear,
+            playMode, adsBlock, inputCommands, location,
+            extensionEnabled, extensionPath,
+        } = params;
+
+        if (!this.isRunning) return;
+
+        if (visitIndex > 1 && threadDelay > 0) {
+            await this._delay(threadDelay * 1000);
+        }
+
+        if (!this.isRunning) return;
+
+        if (memClear >= 10 && visitIndex % memClear === 0) {
+            logger.info(`Memory cleanup triggered at visit ${visitIndex}`);
+            if (global.gc) global.gc();
+        }
+
+        this._notifyVisitStarted();
+
+        const visitor = new ManualVisitor({
+            url,
+            referer,
+            isReferer,
+            userAgent,
+            threadId: visitIndex,
+            screenSize,
+            playMode,
+            adsBlock,
+            commands: inputCommands,
+            location,
+            extensionEnabled,
+            extensionPath,
+        });
+
+        this.activeVisitors.push(visitor);
+
+        try {
+            await visitor.execute();
+            this._collectReplay(visitor);
+            this._collectResult(visitor);
+            this._notifyVisitCompleted();
+        } catch (error) {
+            this._collectReplay(visitor);
+            this._collectResult(visitor);
+            if (this.isRunning) {
+                logger.error(`Visit ${visitIndex} failed: ${error.message}`);
+            }
+        } finally {
+            const index = this.activeVisitors.indexOf(visitor);
+            if (index > -1) {
+                this.activeVisitors.splice(index, 1);
+            }
+        }
     }
 
     /**
