@@ -164,6 +164,58 @@
         .btn-secondary { background: var(--bg-input); color: var(--text); border: 1px solid var(--border); }
         .btn-secondary:hover:not(:disabled) { background: var(--border); }
         .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .btn-sm { padding: 6px 12px; font-size: 11px; border-radius: 6px; }
+
+        /* ===== CAMPAIGN CSV ===== */
+        .csv-campaign-box {
+            margin-bottom: 14px;
+            padding: 12px 14px;
+            background: var(--bg-input);
+            border: 1px solid var(--border);
+            border-left: 3px solid var(--primary);
+            border-radius: 8px;
+        }
+        .csv-campaign-box.loaded { border-left-color: var(--success); }
+        .csv-campaign-header {
+            display: flex; align-items: center; gap: 8px;
+            margin-bottom: 6px;
+        }
+        .csv-campaign-title { font-size: 13px; font-weight: 600; color: var(--text); }
+        .csv-campaign-badge {
+            font-size: 10px; padding: 2px 8px; border-radius: 10px;
+            background: var(--bg-card); color: var(--text-muted);
+            border: 1px solid var(--border); text-transform: uppercase;
+            letter-spacing: 0.4px;
+        }
+        .csv-campaign-desc {
+            font-size: 11px; line-height: 1.5; color: var(--text-muted);
+            margin-bottom: 10px;
+        }
+        .csv-campaign-desc code {
+            background: var(--bg-card); padding: 1px 5px; border-radius: 3px;
+            font-size: 10.5px; color: var(--primary); font-family: monospace;
+        }
+        .csv-campaign-desc strong { color: var(--text); }
+        .csv-campaign-actions {
+            display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px;
+        }
+        .csv-campaign-status {
+            display: flex; align-items: center; gap: 8px;
+            padding: 7px 10px;
+            background: var(--bg-card); border-radius: 6px;
+            font-size: 11.5px; color: var(--text-muted);
+            border: 1px solid var(--border);
+        }
+        .csv-campaign-status.loaded {
+            color: var(--success);
+            border-color: rgba(34, 197, 94, 0.35);
+        }
+        .csv-campaign-status.error {
+            color: var(--danger);
+            border-color: rgba(239, 68, 68, 0.35);
+        }
+        .csv-status-icon { font-size: 14px; line-height: 1; }
+        .csv-status-text { flex: 1; }
 
         /* ===== STATUS BAR ===== */
         .status-bar {
@@ -565,19 +617,24 @@
                         <textarea id="campaignLinks" class="large-textarea" placeholder="https://example.com?utm_source=google&utm_medium=cpc"></textarea>
                     </div>
 
-                    <div class="form-group" style="padding:10px;background:var(--bg-input);border-radius:6px;border-left:3px solid #4a9eff;">
-                        <label style="font-weight:600;margin-bottom:6px;">📄 Campaign CSV (per-URL ranges) — optional</label>
-                        <div style="font-size:11px;color:#888;margin-bottom:8px;">
-                            CSV columns: <code>url,visits,bounce,duration,pages</code> — each numeric field
-                            accepts an exact value (<code>42</code>) or a range (<code>40-50</code>) that is
-                            randomly resolved each run. Overrides Total Visits and global bounce/duration/pages.
+                    <div class="csv-campaign-box" id="csvCampaignBox">
+                        <div class="csv-campaign-header">
+                            <span class="csv-campaign-title">📄 Campaign CSV — per-URL ranges</span>
+                            <span class="csv-campaign-badge">Optional</span>
                         </div>
-                        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px;">
-                            <button type="button" class="secondary-btn" onclick="loadCampaignCsv()">📂 Load CSV</button>
-                            <button type="button" class="secondary-btn" onclick="downloadCampaignCsvTemplate()">⬇️ Download Template</button>
-                            <button type="button" class="secondary-btn" onclick="clearCampaignCsv()">✖ Clear</button>
+                        <div class="csv-campaign-desc">
+                            Columns: <code>url,visits,bounce,duration,pages</code>. Each numeric field accepts an exact value (<code>42</code>) or a range (<code>40-50</code>) — resolved randomly per run.
+                            When loaded, this <strong>overrides</strong> Total Visits and global bounce/duration/pages.
                         </div>
-                        <div id="csvCampaignStatus" style="font-size:11px;color:#888;">No CSV loaded — using URL list above.</div>
+                        <div class="csv-campaign-actions">
+                            <button type="button" class="btn btn-secondary btn-sm" onclick="loadCampaignCsv()">📂 Load CSV</button>
+                            <button type="button" class="btn btn-secondary btn-sm" onclick="downloadCampaignCsvTemplate()">⬇️ Template</button>
+                            <button type="button" class="btn btn-secondary btn-sm" onclick="clearCampaignCsv()">✖ Clear</button>
+                        </div>
+                        <div id="csvCampaignStatus" class="csv-campaign-status">
+                            <span class="csv-status-icon">○</span>
+                            <span class="csv-status-text">No CSV loaded — using URL list above.</span>
+                        </div>
                     </div>
 
                     <div class="form-group">
@@ -1261,11 +1318,21 @@ gate.decodo.com:7000:user-country-in-city-delhi:password"
         let campaignCsvRows = null;
         let campaignCsvPath = null;
 
+        function setCsvStatus(state, icon, text) {
+            const box = document.getElementById('csvCampaignBox');
+            const status = document.getElementById('csvCampaignStatus');
+            status.className = 'csv-campaign-status' + (state ? ' ' + state : '');
+            box.classList.toggle('loaded', state === 'loaded');
+            status.querySelector('.csv-status-icon').textContent = icon;
+            status.querySelector('.csv-status-text').textContent = text;
+        }
+
         async function loadCampaignCsv() {
             try {
                 const res = await api.loadCampaignCsv();
                 if (res.cancelled) return;
                 if (!res.success) {
+                    setCsvStatus('error', '✖', 'Load failed: ' + (res.error || 'Unknown error').split('\n')[0]);
                     alert('Failed to load CSV:\n' + (res.error || 'Unknown error'));
                     addLog('error', 'CSV load failed: ' + (res.error || 'Unknown'));
                     return;
@@ -1276,17 +1343,17 @@ gate.decodo.com:7000:user-country-in-city-delhi:password"
                     return sum + (r.visits.kind === 'value' ? r.visits.value : Math.round((r.visits.min + r.visits.max) / 2));
                 }, 0);
                 const fileName = res.path.split(/[\\/]/).pop();
-                let msg = `✅ ${fileName} — ${res.rows.length} URLs, ~${totalVisits} total visits`;
+                let msg = `${fileName} — ${res.rows.length} URLs · ~${totalVisits} visits`;
                 if (res.errors && res.errors.length > 0) {
                     msg += ` (${res.errors.length} warning${res.errors.length > 1 ? 's' : ''})`;
                 }
-                document.getElementById('csvCampaignStatus').innerHTML = msg;
-                document.getElementById('csvCampaignStatus').style.color = '#4a9eff';
+                setCsvStatus('loaded', '✓', msg);
                 addLog('info', `Campaign CSV loaded: ${res.rows.length} URLs from ${res.path}`);
                 if (res.errors && res.errors.length > 0) {
                     res.errors.forEach(e => addLog('warning', 'CSV: ' + e));
                 }
             } catch (e) {
+                setCsvStatus('error', '✖', 'Error: ' + e.message);
                 alert('Error loading CSV: ' + e.message);
             }
         }
@@ -1307,9 +1374,7 @@ gate.decodo.com:7000:user-country-in-city-delhi:password"
         function clearCampaignCsv() {
             campaignCsvRows = null;
             campaignCsvPath = null;
-            const el = document.getElementById('csvCampaignStatus');
-            el.textContent = 'No CSV loaded — using URL list above.';
-            el.style.color = '#888';
+            setCsvStatus('', '○', 'No CSV loaded — using URL list above.');
             addLog('info', 'Campaign CSV cleared');
         }
 
