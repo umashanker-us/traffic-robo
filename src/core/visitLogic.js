@@ -290,6 +290,20 @@ class VisitLogic {
                     extensionEnabled,
                     extensionPath,
                     resolvedCsvRows,
+                    trafficSourceType,
+                    searchEngine,
+                    searchKeywords,
+                    referralUrls,
+                    socialPlatforms,
+                    utmSource,
+                    utmMedium,
+                    utmCampaign,
+                    utmTerm,
+                    utmContent,
+                    mixedDirect,
+                    mixedOrganic,
+                    mixedReferral,
+                    mixedSocial,
                 });
             }
 
@@ -591,15 +605,26 @@ class VisitLogic {
             threadDelay, memClear, userAgentList, screenSizes,
             playMode, adsBlock, inputCommands, location,
             extensionEnabled, extensionPath, resolvedCsvRows,
+            trafficSourceType, searchEngine, searchKeywords, referralUrls,
+            socialPlatforms, utmSource, utmMedium, utmCampaign, utmTerm, utmContent,
+            mixedDirect, mixedOrganic, mixedReferral, mixedSocial,
         } = config;
 
         const queue = await this._createQueue(threads);
         this.queue = queue;  // Store reference for stop()
 
+        const trafficSourceConfig = trafficSourceType ? {
+            trafficSourceType, searchEngine, searchKeywords,
+            referralUrls, socialPlatforms,
+            utmSource, utmMedium, utmCampaign, utmTerm, utmContent,
+            mixedDirect, mixedOrganic, mixedReferral, mixedSocial,
+        } : null;
+
         const baseTaskParams = {
             isReferer, threadDelay, memClear,
             playMode, adsBlock, inputCommands, location,
             extensionEnabled, extensionPath,
+            trafficSourceConfig,
         };
 
         if (Array.isArray(resolvedCsvRows) && resolvedCsvRows.length > 0) {
@@ -680,6 +705,7 @@ class VisitLogic {
             isReferer, threadDelay, memClear,
             playMode, adsBlock, inputCommands, location,
             extensionEnabled, extensionPath,
+            trafficSourceConfig,
         } = params;
 
         if (!this.isRunning) return;
@@ -697,10 +723,25 @@ class VisitLogic {
 
         this._notifyVisitStarted();
 
+        // Per-visit traffic source resolution: overrides legacy referer/url with
+        // resolved values (UTM-appended URL, search/social referer header, etc.)
+        let resolvedUrl = url;
+        let resolvedReferer = referer;
+        let resolvedIsReferer = isReferer;
+        let resolvedVisitReferer = isReferer && !!referer;
+        if (trafficSourceConfig) {
+            const r = resolveTrafficSource(trafficSourceConfig, url);
+            resolvedUrl = r.campaignUrl;
+            resolvedReferer = r.referer;
+            resolvedIsReferer = r.isReferer;
+            resolvedVisitReferer = r.visitReferer;
+        }
+
         const visitor = new ManualVisitor({
-            url,
-            referer,
-            isReferer,
+            url: resolvedUrl,
+            referer: resolvedReferer,
+            isReferer: resolvedIsReferer,
+            visitReferer: resolvedVisitReferer,
             userAgent,
             threadId: visitIndex,
             screenSize,

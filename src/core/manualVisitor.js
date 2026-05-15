@@ -18,6 +18,9 @@ class ManualVisitor {
         this.url = config.url;
         this.referer = config.referer;
         this.isReferer = config.isReferer;
+        // visitReferer: navigate to referer page first, then redirect to campaign URL.
+        // Defaults to isReferer for backward compat when caller didn't set it.
+        this.visitReferer = config.visitReferer !== undefined ? config.visitReferer : config.isReferer;
         this.userAgent = config.userAgent;
         this.threadId = config.threadId;
         this.screenSize = config.screenSize;
@@ -139,13 +142,35 @@ class ManualVisitor {
     }
 
     /**
-     * Visit the initial page
+     * Visit the initial page.
+     * If visitReferer is true (e.g. Referral mode), navigate to the referer
+     * page first, then redirect to the campaign URL so document.referrer is set.
      */
     async _visitPage() {
-        await this.page.goto(this.url, {
-            waitUntil: 'domcontentloaded',
-            timeout: 60000
-        });
+        if (this.visitReferer && this.referer) {
+            try {
+                await this.page.goto(this.referer, {
+                    waitUntil: 'domcontentloaded',
+                    timeout: 30000
+                });
+                await this._randomDelay(800, 1500);
+                await this.page.evaluate((url) => {
+                    window.location.href = url;
+                }, this.url);
+                await this.page.waitForLoadState('domcontentloaded', { timeout: 60000 });
+            } catch (e) {
+                this.logger.warn(`Referer navigation failed (${e.message}) — falling back to direct visit`);
+                await this.page.goto(this.url, {
+                    waitUntil: 'domcontentloaded',
+                    timeout: 60000
+                });
+            }
+        } else {
+            await this.page.goto(this.url, {
+                waitUntil: 'domcontentloaded',
+                timeout: 60000
+            });
+        }
         await this._randomDelay(1000, 2000);
     }
 
