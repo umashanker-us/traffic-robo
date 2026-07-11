@@ -14,7 +14,7 @@ const path = require('path');
 const fs = require('fs');
 const { getLogger, getCampaignLogDir } = require('../helpers/logger');
 const Constants = require('../helpers/constants');
-const { ProxyRouter, isGACollectRequest, isGAScript, parseProxyString } = require('../helpers/proxyRouter');
+const { ProxyRouter, isGACollectRequest, isGAScript, parseProxyString, parseCustomProxyPatterns, matchesCustomProxyPattern, resolveTrackerChain } = require('../helpers/proxyRouter');
 const { generateIndianIP } = require('../helpers/indianIP');
 const { SessionReplay } = require('../helpers/sessionReplay');
 const { patchCollectUrlForReturning } = require('../helpers/collectPatch');
@@ -53,6 +53,12 @@ class ManualVisitor {
         this.proxyUrl = config.proxyUrl || '';
         this.proxyConfig = this.proxyEnabled ? parseProxyString(this.proxyUrl) : null;
         this.proxyRouter = null;
+
+        // Custom proxy URL patterns (CM360 / ad trackers) — parity with AutomaticVisitor
+        this.customProxyEnabled = !!config.customProxyEnabled;
+        this.customProxyPatterns = this.customProxyEnabled
+            ? parseCustomProxyPatterns(config.customProxyPatterns || '')
+            : [];
 
         // IP rotation
         this.ipRotation = !!config.ipRotation;
@@ -247,11 +253,10 @@ class ManualVisitor {
      * Create browser context
      */
     async _createContext() {
+        const isHeadless = this.playMode === Constants.PLAY_MODES.FASTEST ||
+                          this.playMode === Constants.PLAY_MODES.FAST;
+        const isMobileUA = this.userAgent.includes('Mobile');
         const contextOptions = {
-            viewport: {
-                width: this.screenSize.width,
-                height: this.screenSize.height
-            },
             userAgent: this.userAgent,
             locale: this.locationData.locale,
             timezoneId: this.locationData.timezone,
@@ -261,6 +266,17 @@ class ManualVisitor {
             },
             permissions: ['geolocation']
         };
+        if (isHeadless) {
+            contextOptions.viewport = {
+                width: this.screenSize.width,
+                height: this.screenSize.height
+            };
+            contextOptions.hasTouch = isMobileUA;
+            contextOptions.isMobile = isMobileUA;
+            contextOptions.deviceScaleFactor = isMobileUA ? 2 : 1;
+        } else {
+            contextOptions.viewport = null;
+        }
 
         if (this.isReferer && this.referer) {
             contextOptions.extraHTTPHeaders = {
@@ -365,6 +381,26 @@ class ManualVisitor {
                     }
                     return;
                 }
+                // Custom proxy URL patterns for SUBRESOURCE pixels fired during
+                // page load. The initial click-tracker NAVIGATION is pre-resolved
+                // in Node before page.goto (see _visitPage), so this branch only
+                // handles in-page tracker hits — never top-frame navigation.
+                if (self.customProxyEnabled && self.customProxyPatterns.length > 0 &&
+                    matchesCustomProxyPattern(url, self.customProxyPatterns)) {
+                    self.proxyRouter.stats.totalRequests++;
+                    self.proxyRouter.stats.proxiedRequests++;
+                    try {
+                        const response = await self.proxyRouter.makeProxiedRequest(request);
+                        await route.fulfill({
+                            status: response.status,
+                            headers: response.headers,
+                            body: response.body,
+                        });
+                    } catch (e) {
+                        try { await route.continue(); } catch {}
+                    }
+                    return;
+                }
                 self.proxyRouter.stats.totalRequests++;
                 self.proxyRouter.stats.directRequests++;
                 if (isGAScript(url)) {
@@ -403,6 +439,25 @@ class ManualVisitor {
      * page first, then redirect to the campaign URL so document.referrer is set.
      */
     async _visitPage() {
+        // Pre-resolve click-tracker redirect chain through proxy (see automaticVisitor
+        // for rationale). Browser then loads only the final landing page.
+        let urlToNavigate = this.url;
+        if (this.customProxyEnabled && this.proxyConfig && this.customProxyPatterns.length > 0
+            && matchesCustomProxyPattern(this.url, this.customProxyPatterns)) {
+            try {
+                const chainResult = await resolveTrackerChain(
+                    this.url,
+                    this.proxyConfig,
+                    this.customProxyPatterns,
+                    this.logger
+                );
+                urlToNavigate = chainResult.finalUrl;
+                this.logger.info(`Tracker chain resolved via proxy: ${chainResult.hops.length} hop(s) → ${urlToNavigate.substring(0, 120)}`);
+            } catch (e) {
+                this.logger.warn(`Tracker chain resolution failed: ${e.message} — falling back to direct navigation`);
+            }
+        }
+
         if (this.visitReferer && this.referer) {
             try {
                 await this.page.goto(this.referer, {
@@ -412,21 +467,26 @@ class ManualVisitor {
                 await this._randomDelay(800, 1500);
                 await this.page.evaluate((url) => {
                     window.location.href = url;
-                }, this.url);
+                }, urlToNavigate);
                 await this.page.waitForLoadState('domcontentloaded', { timeout: 60000 });
             } catch (e) {
                 this.logger.warn(`Referer navigation failed (${e.message}) — falling back to direct visit`);
-                await this.page.goto(this.url, {
+                await this.page.goto(urlToNavigate, {
                     waitUntil: 'domcontentloaded',
                     timeout: 60000
                 });
             }
         } else {
-            await this.page.goto(this.url, {
+            await this.page.goto(urlToNavigate, {
                 waitUntil: 'domcontentloaded',
                 timeout: 60000
             });
         }
+
+        // Resolve true primary domain from the landed URL — if the URL was a
+        // CM360 / ad-tracker click URL, page.url() now points at the real
+        // destination after the 302 chain.
+        this._resolveLandedDomain();
         await this._randomDelay(1000, 2000);
     }
 
@@ -739,6 +799,22 @@ class ManualVisitor {
         } catch {
             return '';
         }
+    }
+
+    /**
+     * After the initial navigation settles, re-derive primaryDomain from the
+     * real landed URL — same purpose as in AutomaticVisitor: when the user
+     * pasted a CM360 / ad-tracker URL, the 302 chain lands on the real site
+     * and internal traversal must respect that domain, not the tracker.
+     */
+    _resolveLandedDomain() {
+        if (!this.page) return;
+        const landedUrl = this.page.url();
+        const landedDomain = this._extractDomain(landedUrl);
+        if (!landedDomain || landedDomain === this.primaryDomain) return;
+        this.logger.info(`Domain resolved after redirect: ${this.primaryDomain} → ${landedDomain}`);
+        this.primaryDomain = landedDomain;
+        this.landedUrl = landedUrl;
     }
 
     /**

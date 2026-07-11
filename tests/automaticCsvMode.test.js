@@ -107,6 +107,113 @@ describe('_runAutomaticMode CSV branch', () => {
         expect(calls.filter(u => u === 'https://c.com')).toHaveLength(20);
     });
 
+    test('CSV mode: enqueues URLs round-robin so all run in parallel', async () => {
+        const vl = new VisitLogic();
+        vl.isRunning = true;
+        vl.cookieJarPool = [[{ name: '_ga', value: 'GA1.x' }]];
+        vl._createQueue = async () => new FakeQueue();
+
+        const resolvedCsvRows = [
+            { url: 'https://a.com', visits: 3, bounce: 40, duration: 35, pages: 3 },
+            { url: 'https://b.com', visits: 3, bounce: 45, duration: 40, pages: 4 },
+            { url: 'https://c.com', visits: 3, bounce: 42, duration: 38, pages: 5 },
+        ];
+        const csvVisitsByUrl = new Map(resolvedCsvRows.map(r => [r.url, makeVisits(100)]));
+
+        await vl._runAutomaticMode({
+            ...COMMON_CONFIG,
+            urlList: resolvedCsvRows.map(r => r.url),
+            totalBatches: 1,
+            userAgentList: makeUserAgents(100),
+            visitsList: makeVisits(100),
+            csvVisitsByUrl,
+            resolvedCsvRows,
+            screenSizes: makeScreens(100),
+            oldUserFlags: Array(100).fill(false),
+        });
+
+        const calls = AutomaticVisitor.mock.calls.map(c => c[0].campaignUrl);
+        expect(new Set(calls.slice(0, 3)).size).toBe(3);
+        expect(calls).toEqual([
+            'https://a.com', 'https://b.com', 'https://c.com',
+            'https://a.com', 'https://b.com', 'https://c.com',
+            'https://a.com', 'https://b.com', 'https://c.com',
+        ]);
+    });
+
+    test('CSV mode: each visit pulls from its OWN URL\'s visit distribution', async () => {
+        // Tag each URL's csvVisits with a marker so we can verify the right
+        // distribution flows through into ManualVisitor — interleaving must
+        // not let URL B's visit metrics leak into URL A's task.
+        const vl = new VisitLogic();
+        vl.isRunning = true;
+        vl.cookieJarPool = [[{ name: '_ga', value: 'GA1.x' }]];
+        vl._createQueue = async () => new FakeQueue();
+
+        const resolvedCsvRows = [
+            { url: 'https://a.com', visits: 5, bounce: 40, duration: 35, pages: 3 },
+            { url: 'https://b.com', visits: 5, bounce: 45, duration: 40, pages: 4 },
+        ];
+        const aVisits = Array.from({ length: 100 }, (_, i) => ({ tag: 'A', i }));
+        const bVisits = Array.from({ length: 100 }, (_, i) => ({ tag: 'B', i }));
+        const csvVisitsByUrl = new Map([
+            ['https://a.com', aVisits],
+            ['https://b.com', bVisits],
+        ]);
+
+        await vl._runAutomaticMode({
+            ...COMMON_CONFIG,
+            urlList: resolvedCsvRows.map(r => r.url),
+            totalBatches: 1,
+            userAgentList: makeUserAgents(100),
+            visitsList: makeVisits(100),
+            csvVisitsByUrl,
+            resolvedCsvRows,
+            screenSizes: makeScreens(100),
+            oldUserFlags: Array(100).fill(false),
+        });
+
+        const calls = AutomaticVisitor.mock.calls;
+        for (const call of calls) {
+            const cfg = call[0];
+            const expectedTag = cfg.campaignUrl === 'https://a.com' ? 'A' : 'B';
+            expect(cfg.visit.tag).toBe(expectedTag);
+        }
+    });
+
+    test('CSV mode: per-URL visit cursor wraps with reshuffle when visits > 100', async () => {
+        // URL with 150 visits should see all 100 distribution slots at least
+        // once, then start over after the wrap.
+        const vl = new VisitLogic();
+        vl.isRunning = true;
+        vl.cookieJarPool = [[{ name: '_ga', value: 'GA1.x' }]];
+        vl._createQueue = async () => new FakeQueue();
+
+        const resolvedCsvRows = [
+            { url: 'https://big.com', visits: 150, bounce: 40, duration: 35, pages: 3 },
+        ];
+        const bigVisits = Array.from({ length: 100 }, (_, i) => ({ slotId: i }));
+        const csvVisitsByUrl = new Map([['https://big.com', bigVisits]]);
+
+        await vl._runAutomaticMode({
+            ...COMMON_CONFIG,
+            urlList: ['https://big.com'],
+            totalBatches: 1,
+            userAgentList: makeUserAgents(100),
+            visitsList: makeVisits(100),
+            csvVisitsByUrl,
+            resolvedCsvRows,
+            screenSizes: makeScreens(100),
+            oldUserFlags: Array(100).fill(false),
+        });
+
+        const calls = AutomaticVisitor.mock.calls;
+        expect(calls).toHaveLength(150);
+        // First 100 visits cover all 100 distribution slots exactly once
+        const firstHundredSlots = calls.slice(0, 100).map(c => c[0].visit.slotId).sort((a, b) => a - b);
+        expect(firstHundredSlots).toEqual(Array.from({ length: 100 }, (_, i) => i));
+    });
+
     test('Standard mode (no CSV): enqueues totalBatches * 100 * urlList', async () => {
         const vl = new VisitLogic();
         vl.isRunning = true;

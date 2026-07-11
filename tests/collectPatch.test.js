@@ -20,25 +20,30 @@ describe('patchCollectUrlForReturning', () => {
         expect(new URL(out).searchParams.get('_nsi')).toBe('0');
     });
 
-    test('flips seg=0 to seg=1', () => {
-        const out = patchCollectUrlForReturning(`${BASE}?seg=0&tid=G-X`);
-        expect(new URL(out).searchParams.get('seg')).toBe('1');
+    test('leaves seg untouched — gtag.js owns engagement', () => {
+        // Forcing seg=1 incorrectly marked bouncing returning users as engaged,
+        // distorting GA4 engagement rate and average session duration.
+        const out = patchCollectUrlForReturning(`${BASE}?seg=0&_fv=1&tid=G-X`);
+        expect(out).not.toBeNull();
+        expect(new URL(out).searchParams.get('seg')).toBe('0');
     });
 
-    test('handles all four flags together', () => {
+    test('handles the three session-identity flags together', () => {
         const url = `${BASE}?_fv=1&sct=1&_nsi=1&seg=0&tid=G-X`;
         const out = patchCollectUrlForReturning(url);
         const p = new URL(out).searchParams;
         expect(p.has('_fv')).toBe(false);
         expect(p.get('sct')).toBe('2');
         expect(p.get('_nsi')).toBe('0');
-        expect(p.get('seg')).toBe('1');
+        expect(p.get('seg')).toBe('0'); // preserved
         expect(p.get('tid')).toBe('G-X');
     });
 
     test('returns null when nothing needs patching', () => {
         expect(patchCollectUrlForReturning(`${BASE}?tid=G-X&en=x`)).toBeNull();
-        expect(patchCollectUrlForReturning(`${BASE}?sct=2&seg=1`)).toBeNull();
+        expect(patchCollectUrlForReturning(`${BASE}?sct=2`)).toBeNull();
+        // seg alone never triggers a patch anymore
+        expect(patchCollectUrlForReturning(`${BASE}?seg=0`)).toBeNull();
     });
 
     test('leaves sct=10 alone (not a 1)', () => {
@@ -47,10 +52,6 @@ describe('patchCollectUrlForReturning', () => {
 
     test('leaves _nsi=0 alone (not a 1)', () => {
         expect(patchCollectUrlForReturning(`${BASE}?_nsi=0`)).toBeNull();
-    });
-
-    test('leaves seg=2 alone (not a 0)', () => {
-        expect(patchCollectUrlForReturning(`${BASE}?seg=2`)).toBeNull();
     });
 
     test('returns null on malformed URL', () => {

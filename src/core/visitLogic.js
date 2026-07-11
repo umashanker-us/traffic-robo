@@ -79,6 +79,9 @@ class VisitLogic {
             // Proxy settings (proxy is always /collect-only — page loads go direct)
             proxyEnabled = false,
             proxyUrl = '',
+            // Custom proxy URL patterns (CM360 / ad trackers) — paste click URL into campaignUrl
+            customProxyEnabled = false,
+            customProxyPatterns = '',
             // Extension settings - NEW
             extensionEnabled = false,
             extensionPath = '',
@@ -245,6 +248,8 @@ class VisitLogic {
                     adsBlock,
                     proxyEnabled,
                     proxyUrl,
+                    customProxyEnabled,
+                    customProxyPatterns,
                     location,
                     extensionEnabled,
                     extensionPath,
@@ -297,6 +302,8 @@ class VisitLogic {
                     extensionPath,
                     proxyEnabled,
                     proxyUrl,
+                    customProxyEnabled,
+                    customProxyPatterns,
                     ipRotation,
                     fastMode,
                     blockImages,
@@ -362,6 +369,7 @@ class VisitLogic {
             csvVisitsByUrl, resolvedCsvRows,
             screenSizes, oldUserFlags, restrictToPrimaryDomain,
             previousURL, useBaseUrlForOldUser, playMode, adsBlock, proxyEnabled, proxyUrl,
+            customProxyEnabled, customProxyPatterns,
             location, extensionEnabled, extensionPath, ipRotation,
             fastMode, blockImages, blockMedia, blockFonts, blockStyles, blockScripts,
             trafficSourceType, searchEngine, searchKeywords, referralUrls,
@@ -390,52 +398,88 @@ class VisitLogic {
             trafficSourceConfig, isReferer, threadDelay, memClear,
             restrictToPrimaryDomain, previousURL, useBaseUrlForOldUser,
             playMode, adsBlock, proxyEnabled, proxyList, proxyUrl,
+            customProxyEnabled, customProxyPatterns,
             location, extensionEnabled, extensionPath, ipRotation,
             fastMode, blockImages, blockMedia, blockFonts, blockStyles, blockScripts,
         };
 
         if (csvVisitsByUrl && resolvedCsvRows) {
-            // CSV mode: iterate per URL, each with its own visit count and visits array
-            let globalVisitIndex = 0;
-            for (const csvRow of resolvedCsvRows) {
-                if (!this.isRunning) break;
+            // CSV mode: round-robin interleave so all URLs run in parallel, not
+            // sequentially. Each visit still uses ITS URL's own 100-slot Visit
+            // distribution from csvVisitsByUrl, so per-URL bounce%/duration/pages
+            // remain exact — interleaving only changes enqueue order, not what
+            // gets assigned to each visit.
+            //
+            // Per-URL Visit cursor: each URL keeps its own shuffled 100-slot
+            // distribution and a cursor that wraps mod 100 (reshuffles on wrap).
+            // Property preserved: per 100 visits of THAT URL, each distribution
+            // slot is used exactly once — same guarantee as the previous
+            // per-batch shuffle, just applied per-URL across the interleaved
+            // stream instead of per-batch.
+            const urlState = new Map();
+            for (const r of resolvedCsvRows) {
+                urlState.set(r.url, {
+                    shuffled: shuffleArray(csvVisitsByUrl.get(r.url)),
+                    cursor: 0,
+                });
+            }
 
-                const csvVisits = csvVisitsByUrl.get(csvRow.url);
-                const totalForUrl = csvRow.visits;
-                const batchesForUrl = Math.ceil(totalForUrl / 100);
-                let enqueuedForUrl = 0;
-
-                for (let batchNum = 0; batchNum < batchesForUrl; batchNum++) {
-                    if (!this.isRunning) break;
-
-                    const paired = userAgentList.map((ua, idx) => ({ ua, screen: screenSizes[idx] }));
-                    const shuffledPairs = shuffleArray(paired);
-                    const shuffledUA = shuffledPairs.map(p => p.ua);
-                    const shuffledScreens = shuffledPairs.map(p => p.screen);
-                    const shuffledVisits = shuffleArray(csvVisits);
-                    const shuffledOldUser = shuffleArray(oldUserFlags);
-                    const shuffledReferers = shuffleArray(refererList);
-
-                    const batchLimit = Math.min(100, totalForUrl - enqueuedForUrl);
-                    for (let i = 0; i < batchLimit; i++) {
-                        if (!this.isRunning) break;
-                        enqueuedForUrl++;
-                        globalVisitIndex++;
-                        const visitIndex = globalVisitIndex;
-                        const legacyReferer = shuffledReferers[i % shuffledReferers.length];
-                        const params = {
-                            ...baseTaskParams,
-                            visitIndex,
-                            campaignUrl: csvRow.url,
-                            legacyReferer,
-                            userAgent: shuffledUA[i],
-                            visit: shuffledVisits[i],
-                            screenSize: shuffledScreens[i],
-                            isOldUserFlag: shuffledOldUser[i],
-                        };
-                        queue.add(() => this._executeVisitTask(params));
+            // Build round-robin slot list. Exhausted URLs drop out of rotation
+            // automatically; per-URL totals stay exact.
+            const visitSlots = [];
+            const remaining = resolvedCsvRows.map(r => r.visits);
+            let activeUrls = resolvedCsvRows.filter(r => r.visits > 0).length;
+            while (activeUrls > 0) {
+                for (let idx = 0; idx < resolvedCsvRows.length; idx++) {
+                    if (remaining[idx] > 0) {
+                        visitSlots.push(resolvedCsvRows[idx]);
+                        remaining[idx]--;
+                        if (remaining[idx] === 0) activeUrls--;
                     }
                 }
+            }
+
+            let shuffledUA = [];
+            let shuffledScreens = [];
+            let shuffledOldUser = [];
+            let shuffledReferers = [];
+            let globalVisitIndex = 0;
+            for (let slotIdx = 0; slotIdx < visitSlots.length; slotIdx++) {
+                if (!this.isRunning) break;
+                // Reshuffle UA/screen/oldUser/referer every 100 visits across
+                // the interleaved stream — preserves the diversity guarantees
+                // of the previous per-batch shuffle.
+                if (slotIdx % 100 === 0) {
+                    const paired = userAgentList.map((ua, idx) => ({ ua, screen: screenSizes[idx] }));
+                    const shuffledPairs = shuffleArray(paired);
+                    shuffledUA = shuffledPairs.map(p => p.ua);
+                    shuffledScreens = shuffledPairs.map(p => p.screen);
+                    shuffledOldUser = shuffleArray(oldUserFlags);
+                    shuffledReferers = shuffleArray(refererList);
+                }
+                const localIdx = slotIdx % 100;
+                const csvRow = visitSlots[slotIdx];
+
+                // Pull next Visit slot for THIS URL — reshuffle when cursor wraps.
+                const state = urlState.get(csvRow.url);
+                if (state.cursor >= state.shuffled.length) {
+                    state.shuffled = shuffleArray(csvVisitsByUrl.get(csvRow.url));
+                    state.cursor = 0;
+                }
+                const visit = state.shuffled[state.cursor++];
+
+                globalVisitIndex++;
+                const params = {
+                    ...baseTaskParams,
+                    visitIndex: globalVisitIndex,
+                    campaignUrl: csvRow.url,
+                    legacyReferer: shuffledReferers[localIdx % shuffledReferers.length],
+                    userAgent: shuffledUA[localIdx],
+                    visit,
+                    screenSize: shuffledScreens[localIdx],
+                    isOldUserFlag: shuffledOldUser[localIdx % shuffledOldUser.length],
+                };
+                queue.add(() => this._executeVisitTask(params));
             }
         } else {
             // Standard mode: shared visits array across all URLs (cross-product)
@@ -486,6 +530,7 @@ class VisitLogic {
             trafficSourceConfig, isReferer, threadDelay, memClear,
             restrictToPrimaryDomain, previousURL, useBaseUrlForOldUser,
             playMode, adsBlock, proxyEnabled, proxyList, proxyUrl,
+            customProxyEnabled, customProxyPatterns,
             location, extensionEnabled, extensionPath, ipRotation,
             fastMode, blockImages, blockMedia, blockFonts, blockStyles, blockScripts,
         } = params;
@@ -557,6 +602,8 @@ class VisitLogic {
             proxyUrl: proxyList.length > 0
                 ? proxyList[Math.floor(Math.random() * proxyList.length)]
                 : proxyUrl,
+            customProxyEnabled,
+            customProxyPatterns,
             location,
             extensionEnabled,
             extensionPath,
@@ -622,7 +669,9 @@ class VisitLogic {
             avgSessionDuration,
             playMode, adsBlock, inputCommands, location,
             extensionEnabled, extensionPath,
-            proxyEnabled, proxyUrl, ipRotation,
+            proxyEnabled, proxyUrl,
+            customProxyEnabled, customProxyPatterns,
+            ipRotation,
             fastMode, blockImages, blockMedia, blockFonts, blockStyles, blockScripts,
             trafficSourceType, searchEngine, searchKeywords, referralUrls,
             socialPlatforms, utmSource, utmMedium, utmCampaign, utmTerm, utmContent,
@@ -658,6 +707,8 @@ class VisitLogic {
             trafficSourceConfig,
             proxyEnabled: !!proxyEnabled,
             proxyList,
+            customProxyEnabled: !!customProxyEnabled,
+            customProxyPatterns: customProxyPatterns || '',
             ipRotation: !!ipRotation,
             fastMode: !!fastMode,
             blockImages: !!blockImages,
@@ -674,40 +725,60 @@ class VisitLogic {
         if (Array.isArray(resolvedCsvRows) && resolvedCsvRows.length > 0) {
             // CSV mode: per-URL visit counts. bounce/duration/pages are not
             // meaningful in manual mode (commands run instead) — only `visits` is used.
-            let globalVisitIndex = 0;
-            for (const csvRow of resolvedCsvRows) {
-                if (!this.isRunning) break;
-                const totalForUrl = csvRow.visits;
-                const batchesForUrl = Math.ceil(totalForUrl / 100);
-                let enqueuedForUrl = 0;
-
-                for (let batchNum = 0; batchNum < batchesForUrl; batchNum++) {
-                    if (!this.isRunning) break;
-
-                    const paired = userAgentList.map((ua, idx) => ({ ua, screen: screenSizes[idx] }));
-                    const shuffledPairs = shuffleArray(paired);
-                    const shuffledUA = shuffledPairs.map(p => p.ua);
-                    const shuffledScreens = shuffledPairs.map(p => p.screen);
-                    const shuffledReferers = shuffleArray(refererList);
-                    const shuffledOldUser = shuffleArray(safeOldUserFlags);
-
-                    const batchLimit = Math.min(100, totalForUrl - enqueuedForUrl);
-                    for (let i = 0; i < batchLimit; i++) {
-                        if (!this.isRunning) break;
-                        enqueuedForUrl++;
-                        globalVisitIndex++;
-                        const params = {
-                            ...baseTaskParams,
-                            visitIndex: globalVisitIndex,
-                            url: csvRow.url,
-                            referer: shuffledReferers[i % shuffledReferers.length],
-                            userAgent: shuffledUA[i],
-                            screenSize: shuffledScreens[i],
-                            isOldUserFlag: shuffledOldUser[i],
-                        };
-                        queue.add(() => this._executeManualTask(params));
+            //
+            // Round-robin interleave so all URLs run in parallel, not sequentially.
+            // Old behaviour enqueued URL1×N, URL2×M, URL3×K — with p-queue FIFO and
+            // concurrency=threads, the first `threads` picks were all URL1 (URL2
+            // didn't even start until URL1 was nearly done). Interleaved enqueue
+            // (U1,U2,…,Un,U1,U2,…) means the first `threads` picks land on
+            // `threads` distinct URLs, so all URLs progress concurrently.
+            //
+            // Per-URL totals stay exact — we just stop pushing a URL into the
+            // round once its quota is hit.
+            const visitSlots = [];
+            const remaining = resolvedCsvRows.map(r => r.visits);
+            let activeUrls = resolvedCsvRows.filter(r => r.visits > 0).length;
+            while (activeUrls > 0) {
+                for (let idx = 0; idx < resolvedCsvRows.length; idx++) {
+                    if (remaining[idx] > 0) {
+                        visitSlots.push(resolvedCsvRows[idx]);
+                        remaining[idx]--;
+                        if (remaining[idx] === 0) activeUrls--;
                     }
                 }
+            }
+
+            let shuffledUA = [];
+            let shuffledScreens = [];
+            let shuffledReferers = [];
+            let shuffledOldUser = [];
+            let globalVisitIndex = 0;
+            for (let slotIdx = 0; slotIdx < visitSlots.length; slotIdx++) {
+                if (!this.isRunning) break;
+                // Reshuffle UA/screens/referers/oldUser every 100 visits so the
+                // diversity guarantees from the previous per-batch shuffle are
+                // preserved across the interleaved stream.
+                if (slotIdx % 100 === 0) {
+                    const paired = userAgentList.map((ua, idx) => ({ ua, screen: screenSizes[idx] }));
+                    const shuffledPairs = shuffleArray(paired);
+                    shuffledUA = shuffledPairs.map(p => p.ua);
+                    shuffledScreens = shuffledPairs.map(p => p.screen);
+                    shuffledReferers = shuffleArray(refererList);
+                    shuffledOldUser = shuffleArray(safeOldUserFlags);
+                }
+                const localIdx = slotIdx % 100;
+                globalVisitIndex++;
+                const csvRow = visitSlots[slotIdx];
+                const params = {
+                    ...baseTaskParams,
+                    visitIndex: globalVisitIndex,
+                    url: csvRow.url,
+                    referer: shuffledReferers[localIdx % shuffledReferers.length],
+                    userAgent: shuffledUA[localIdx],
+                    screenSize: shuffledScreens[localIdx],
+                    isOldUserFlag: shuffledOldUser[localIdx % shuffledOldUser.length],
+                };
+                queue.add(() => this._executeManualTask(params));
             }
         } else {
             for (let batchNum = 0; batchNum < totalBatches; batchNum++) {
@@ -754,7 +825,9 @@ class VisitLogic {
             playMode, adsBlock, inputCommands, location,
             extensionEnabled, extensionPath,
             trafficSourceConfig,
-            proxyEnabled, proxyList, ipRotation,
+            proxyEnabled, proxyList,
+            customProxyEnabled, customProxyPatterns,
+            ipRotation,
             fastMode, blockImages, blockMedia, blockFonts, blockStyles, blockScripts,
             restrictToPrimaryDomain, previousURL, useBaseUrlForOldUser, avgSessionDuration,
             isOldUserFlag,
@@ -819,6 +892,8 @@ class VisitLogic {
             // Browser-level features ported from automatic mode
             proxyEnabled: !!proxyEnabled,
             proxyUrl: pickedProxyUrl,
+            customProxyEnabled: !!customProxyEnabled,
+            customProxyPatterns: customProxyPatterns || '',
             ipRotation: !!ipRotation,
             fastMode: !!fastMode,
             blockImages, blockMedia, blockFonts, blockStyles, blockScripts,

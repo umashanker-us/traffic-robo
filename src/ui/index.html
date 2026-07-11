@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>GA4 Traffic Robo v2.4</title>
+    <title>GA4 Traffic Robo v2.4.1</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -545,7 +545,7 @@
             <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
                 <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/>
             </svg>
-            GA4 Traffic Robo v2.4
+            GA4 Traffic Robo v2.4.1
             <button id="themeToggle" onclick="toggleTheme()" style="background:none;border:1px solid var(--border);border-radius:6px;cursor:pointer;padding:2px 8px;margin-left:8px;color:var(--text-muted);font-size:14px;" title="Toggle Theme">🌙</button>
         </h1>
         <div class="header-right">
@@ -952,6 +952,37 @@ gate.decodo.com:7000:user-country-in-city-delhi:password"
                 </div>
             </div>
 
+            <!-- Custom Proxy URLs (CM360 / DCM / Ad Trackers) -->
+            <div class="card">
+                <div class="card-title">🎯 Custom Proxy URLs (CM360 / Ad Trackers)</div>
+
+                <div class="info-box">
+                    <strong>Paste your CM360 / ad-tracker click URL directly into the Campaign URL field</strong> (Tab 1).
+                    Browser follows the 302 redirect chain — every hop matching a pattern below is proxied for location, and the real landing domain is auto-detected for internal-link traversal. Bandwidth stays near-zero.
+                </div>
+
+                <div class="form-group" style="margin-top: 10px;">
+                    <div class="checkbox-group" style="margin-bottom: 8px;">
+                        <input type="checkbox" id="customProxyEnabled" onchange="toggleCustomProxySettings()">
+                        <label class="checkbox-label" for="customProxyEnabled">Enable Custom Proxy URLs</label>
+                    </div>
+                    <label>URL patterns to proxy (one per line — substring match, # for comments)</label>
+                    <textarea id="customProxyPatterns" rows="4" disabled
+                        placeholder="# Paste full URLs or hostname/path fragments — each line is matched as a substring
+ad.doubleclick.net/ddm/trackclk
+N768950.5559725SIGMAMEDIA
+googleads.g.doubleclick.net"
+                        style="font-family: monospace; font-size: 11px; resize: vertical;"></textarea>
+                    <small style="color: var(--text-muted);">
+                        Every redirect hop is checked independently — a CM360 click can chain through multiple hosts, and every matched hop gets proxied. After the chain lands, primary domain is re-derived from the real URL so multi-page traversal works.
+                    </small>
+                </div>
+
+                <div style="margin-top: 6px; font-size: 11px; color: var(--text-muted);">
+                    Requires <strong>Proxy Settings</strong> to be enabled above. Without a proxy, these URLs load direct.
+                </div>
+            </div>
+
             <div class="two-col">
                 <!-- IP Rotation -->
                 <div class="card">
@@ -1202,7 +1233,7 @@ gate.decodo.com:7000:user-country-in-city-delhi:password"
                         </span>
                     </div>
                     <div class="log-output" id="logOutput">
-                        <div class="log-entry log-info">[System] GA4 Traffic Robo v2.4 initialized</div>
+                        <div class="log-entry log-info">[System] GA4 Traffic Robo v2.4.1 initialized</div>
                     </div>
                 </div>
 
@@ -1589,7 +1620,10 @@ gate.decodo.com:7000:user-country-in-city-delhi:password"
                 // Proxy settings
                 proxyEnabled: document.getElementById('proxyEnabled').checked,
                 proxyUrl: document.getElementById('proxyUrl').value,
-                
+                // Custom proxy URL patterns (CM360 / ad trackers) — paste click URL directly into Campaign URL field
+                customProxyEnabled: document.getElementById('customProxyEnabled').checked,
+                customProxyPatterns: document.getElementById('customProxyPatterns').value,
+
                 // Extension settings - NEW
                 extensionEnabled: document.getElementById('extensionEnabled').checked,
                 extensionPath: document.getElementById('extensionPath').value,
@@ -1663,6 +1697,12 @@ gate.decodo.com:7000:user-country-in-city-delhi:password"
                 toggleProxySettings();
             }
             if (config.proxyUrl) document.getElementById('proxyUrl').value = config.proxyUrl;
+            // Custom proxy URL patterns
+            if (config.customProxyEnabled !== undefined) {
+                document.getElementById('customProxyEnabled').checked = config.customProxyEnabled;
+                toggleCustomProxySettings();
+            }
+            if (config.customProxyPatterns) document.getElementById('customProxyPatterns').value = config.customProxyPatterns;
             // Extension settings
             if (config.extensionEnabled !== undefined) {
                 document.getElementById('extensionEnabled').checked = config.extensionEnabled;
@@ -1729,7 +1769,14 @@ gate.decodo.com:7000:user-country-in-city-delhi:password"
             document.getElementById('proxyUrl').disabled = !enabled;
             if (enabled) addLog('info', 'Proxy enabled');
         }
-        
+
+        // Toggle custom proxy URL pattern fields
+        function toggleCustomProxySettings() {
+            const enabled = document.getElementById('customProxyEnabled').checked;
+            document.getElementById('customProxyPatterns').disabled = !enabled;
+            if (enabled) addLog('info', 'Custom proxy URLs enabled — paste CM360/ad-tracker URL into Campaign URL field; matching redirect hops route via proxy');
+        }
+
         // Store previous mode for cancel
         
         // Toggle extension settings visibility - NEW
@@ -1899,6 +1946,10 @@ gate.decodo.com:7000:user-country-in-city-delhi:password"
                 addLog('info', `Proxy ENABLED: Only GA requests will use proxy`);
                 addLog('info', `Proxy URL: ${config.proxyUrl.replace(/:[^:]*@/, ':***@')}`); // Hide password
             }
+            if (config.customProxyEnabled && config.customProxyPatterns?.trim()) {
+                const patternCount = config.customProxyPatterns.split(/\r?\n/).map(s => s.trim()).filter(s => s && !s.startsWith('#')).length;
+                addLog('info', `Custom proxy URLs: ${patternCount} pattern${patternCount === 1 ? '' : 's'} will route through proxy — paste click URL into Campaign URL field`);
+            }
             
             // Log extension status
             if (config.extensionEnabled && config.extensionPath) {
@@ -2054,6 +2105,9 @@ gate.decodo.com:7000:user-country-in-city-delhi:password"
             // Proxy settings reset
             document.getElementById('proxyEnabled').checked = false;
             document.getElementById('proxyUrl').value = '';
+            // Custom proxy URLs reset
+            document.getElementById('customProxyEnabled').checked = false;
+            document.getElementById('customProxyPatterns').value = '';
             // IP Rotation reset
             document.getElementById('ipRotation').checked = false;
             // Fast Mode reset
@@ -2093,6 +2147,7 @@ gate.decodo.com:7000:user-country-in-city-delhi:password"
 
             toggleCommandArea();
             toggleProxySettings();
+            toggleCustomProxySettings();
             toggleExtensionSettings();
             toggleTrafficSource();
             addLog('info', 'Form reset to defaults');

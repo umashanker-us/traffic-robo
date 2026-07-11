@@ -144,6 +144,91 @@ describe('_runManualMode CSV branch', () => {
         expect(ManualVisitor.mock.calls).toHaveLength(250);
     });
 
+    test('CSV mode: enqueues URLs round-robin so all run in parallel', async () => {
+        const vl = new VisitLogic();
+        vl.isRunning = true;
+        vl._createQueue = async () => new FakeQueue();
+
+        const resolvedCsvRows = [
+            { url: 'https://a.com', visits: 3, bounce: 40, duration: 35, pages: 3 },
+            { url: 'https://b.com', visits: 3, bounce: 45, duration: 40, pages: 4 },
+            { url: 'https://c.com', visits: 3, bounce: 42, duration: 38, pages: 5 },
+        ];
+
+        await vl._runManualMode({
+            urlList: resolvedCsvRows.map(r => r.url),
+            refererList: [''],
+            isReferer: false,
+            totalBatches: 1,
+            threads: 3,
+            threadDelay: 0,
+            memClear: 0,
+            userAgentList: makeUserAgents(100),
+            screenSizes: makeScreens(100),
+            playMode: 'Fastest',
+            adsBlock: false,
+            inputCommands: '',
+            location: 'India',
+            extensionEnabled: false,
+            extensionPath: '',
+            resolvedCsvRows,
+        });
+
+        const calls = ManualVisitor.mock.calls.map(c => c[0].url);
+        // First 3 picks must hit 3 distinct URLs (true parallel coverage)
+        expect(new Set(calls.slice(0, 3)).size).toBe(3);
+        // Order is round-robin: a,b,c,a,b,c,a,b,c
+        expect(calls).toEqual([
+            'https://a.com', 'https://b.com', 'https://c.com',
+            'https://a.com', 'https://b.com', 'https://c.com',
+            'https://a.com', 'https://b.com', 'https://c.com',
+        ]);
+    });
+
+    test('CSV mode: uneven visit counts — exhausted URL drops out of rotation', async () => {
+        const vl = new VisitLogic();
+        vl.isRunning = true;
+        vl._createQueue = async () => new FakeQueue();
+
+        const resolvedCsvRows = [
+            { url: 'https://a.com', visits: 1, bounce: 40, duration: 35, pages: 3 },
+            { url: 'https://b.com', visits: 3, bounce: 45, duration: 40, pages: 4 },
+            { url: 'https://c.com', visits: 2, bounce: 42, duration: 38, pages: 5 },
+        ];
+
+        await vl._runManualMode({
+            urlList: resolvedCsvRows.map(r => r.url),
+            refererList: [''],
+            isReferer: false,
+            totalBatches: 1,
+            threads: 3,
+            threadDelay: 0,
+            memClear: 0,
+            userAgentList: makeUserAgents(100),
+            screenSizes: makeScreens(100),
+            playMode: 'Fastest',
+            adsBlock: false,
+            inputCommands: '',
+            location: 'India',
+            extensionEnabled: false,
+            extensionPath: '',
+            resolvedCsvRows,
+        });
+
+        const calls = ManualVisitor.mock.calls.map(c => c[0].url);
+        // Per-URL totals preserved
+        expect(calls).toHaveLength(6);
+        expect(calls.filter(u => u === 'https://a.com')).toHaveLength(1);
+        expect(calls.filter(u => u === 'https://b.com')).toHaveLength(3);
+        expect(calls.filter(u => u === 'https://c.com')).toHaveLength(2);
+        // Round 1: a,b,c. Round 2: b,c (a exhausted). Round 3: b (c exhausted).
+        expect(calls).toEqual([
+            'https://a.com', 'https://b.com', 'https://c.com',
+            'https://b.com', 'https://c.com',
+            'https://b.com',
+        ]);
+    });
+
     test('CSV mode: respects isRunning=false (no further enqueues)', async () => {
         const vl = new VisitLogic();
         vl.isRunning = false; // already stopped

@@ -72,6 +72,35 @@ function isGACollectRequest(url) {
 const isGARequest = isGACollectRequest;
 
 /**
+ * Parse the multi-line user-supplied custom proxy pattern textarea into a
+ * normalized array of lowercase substring matchers. Drops blanks and `#`
+ * comment lines so users can annotate their list.
+ */
+function parseCustomProxyPatterns(raw) {
+    if (!raw || typeof raw !== 'string') return [];
+    return raw
+        .split(/\r?\n/)
+        .map(s => s.trim().toLowerCase())
+        .filter(s => s.length > 0 && !s.startsWith('#'));
+}
+
+/**
+ * Check if URL matches any user-supplied custom proxy pattern (substring).
+ * Used to route additional endpoints (CM360 click trackers, custom redirect
+ * chains, third-party pixels) through the proxy alongside GA4 /collect.
+ *
+ * Substring match was chosen deliberately — users paste real URLs from their
+ * ad platforms and shouldn't need to write regex. Each redirect hop in a
+ * chain is checked independently, so a multi-step redirect with all hops
+ * matching the patterns gets every hop proxied.
+ */
+function matchesCustomProxyPattern(url, patterns) {
+    if (!patterns || patterns.length === 0) return false;
+    const lower = url.toLowerCase();
+    return patterns.some(p => lower.includes(p));
+}
+
+/**
  * Check if URL is a GA script (for logging)
  */
 function isGAScript(url) {
@@ -197,13 +226,26 @@ class ProxyRouter {
             }, (res) => {
                 const chunks = [];
                 res.on('data', c => chunks.push(c));
-                res.on('end', () => resolve({
-                    status: res.statusCode || 200,
-                    headers: res.headers || {},
-                    body: Buffer.concat(chunks),
-                }));
+                res.on('end', () => {
+                    // Strip hop-by-hop / framing headers so route.fulfill can pass
+                    // the body cleanly. Node's http already dechunked the body, so
+                    // leaving transfer-encoding=chunked makes Chromium think the
+                    // body is still chunked and aborts top-frame navigations with
+                    // ERR_ABORTED on redirect chains (CM360 / ad-tracker clicks).
+                    const cleanHeaders = { ...(res.headers || {}) };
+                    delete cleanHeaders['transfer-encoding'];
+                    delete cleanHeaders['content-length'];
+                    delete cleanHeaders['connection'];
+                    delete cleanHeaders['keep-alive'];
+                    delete cleanHeaders['proxy-connection'];
+                    resolve({
+                        status: res.statusCode || 200,
+                        headers: cleanHeaders,
+                        body: Buffer.concat(chunks),
+                    });
+                });
             });
-            
+
             req.on('error', reject);
             req.on('timeout', () => { req.destroy(); reject(new Error('Proxy timeout')); });
             const postData = request.postData();
@@ -220,6 +262,98 @@ class ProxyRouter {
     }
 }
 
+/**
+ * Pre-resolve a redirect chain through the Decodo proxy in Node.js.
+ *
+ * Why this exists: Decodo's gateway accepts plain-HTTP forward proxy mode
+ * (the same path /collect uses), but Chromium's native CONNECT tunnel
+ * fails intermittently against the same gateway (ERR_TUNNEL_CONNECTION_FAILED).
+ * route.fulfill of 3xx responses also doesn't survive top-frame navigation
+ * for 3-hop click-tracker chains (ERR_ABORTED). So instead, we walk the
+ * redirect chain ourselves, hop by hop, via Decodo — every hop hits an
+ * upstream tracker with the proxy IP — then return the FINAL landing URL.
+ * The browser then loads that URL DIRECT (cheap), with all tracking params
+ * (dclid, UTMs) intact because they were appended by the upstream redirects.
+ *
+ * Parameters:
+ *   startUrl       — the click-tracker URL pasted as campaign URL
+ *   proxyConfig    — parsed proxy config from parseProxyString
+ *   patterns       — parsed custom-proxy patterns (only URLs that match
+ *                    these will be walked through the proxy; once the chain
+ *                    leaves the patterns we stop and return the URL)
+ *   logger         — optional logger
+ *   maxHops        — safety cap on chain length (default 10)
+ *
+ * Returns: { finalUrl, hops: [{ url, status, viaProxy }] }
+ */
+async function resolveTrackerChain(startUrl, proxyConfig, patterns, logger = null, maxHops = 10) {
+    const hops = [];
+    let currentUrl = startUrl;
+    const proxyAuth = (proxyConfig && proxyConfig.username && proxyConfig.password)
+        ? Buffer.from(`${proxyConfig.username}:${proxyConfig.password}`).toString('base64')
+        : null;
+
+    for (let i = 0; i < maxHops; i++) {
+        const matchesPattern = matchesCustomProxyPattern(currentUrl, patterns);
+        if (!matchesPattern) {
+            return { finalUrl: currentUrl, hops };
+        }
+
+        const hopResult = await new Promise((hopResolve) => {
+            try {
+                const targetUrl = new URL(currentUrl);
+                const headers = {
+                    'Host': targetUrl.host,
+                    'User-Agent': 'Mozilla/5.0',
+                    'Accept': '*/*',
+                };
+                if (proxyAuth) headers['Proxy-Authorization'] = `Basic ${proxyAuth}`;
+
+                const req = http.request({
+                    hostname: proxyConfig.host,
+                    port: proxyConfig.port,
+                    method: 'GET',
+                    path: currentUrl,
+                    headers,
+                    timeout: 10000,
+                }, (res) => {
+                    res.on('data', () => {});
+                    res.on('end', () => hopResolve({
+                        status: res.statusCode,
+                        location: res.headers && res.headers.location,
+                    }));
+                });
+                req.on('error', (e) => hopResolve({ error: e.message }));
+                req.on('timeout', () => { req.destroy(); hopResolve({ error: 'proxy timeout' }); });
+                req.end();
+            } catch (e) {
+                hopResolve({ error: e.message });
+            }
+        });
+
+        if (hopResult.error) {
+            if (logger) logger.warn(`Tracker chain hop failed at ${currentUrl}: ${hopResult.error}`);
+            return { finalUrl: currentUrl, hops, error: hopResult.error };
+        }
+
+        hops.push({ url: currentUrl, status: hopResult.status, viaProxy: true });
+
+        if (hopResult.status >= 300 && hopResult.status < 400 && hopResult.location) {
+            try {
+                currentUrl = new URL(hopResult.location, currentUrl).toString();
+            } catch {
+                return { finalUrl: currentUrl, hops };
+            }
+            continue;
+        }
+
+        return { finalUrl: currentUrl, hops };
+    }
+
+    if (logger) logger.warn(`Tracker chain hit maxHops=${maxHops}, stopping at ${currentUrl}`);
+    return { finalUrl: currentUrl, hops };
+}
+
 module.exports = {
     ProxyRouter,
     isGARequest,
@@ -227,6 +361,9 @@ module.exports = {
     isGAScript,
     parseProxyString,
     createPlaywrightProxy,
+    parseCustomProxyPatterns,
+    matchesCustomProxyPattern,
+    resolveTrackerChain,
     GA_COLLECT_DOMAINS,
     GA_COLLECT_PATHS,
     GA_SCRIPTS_DIRECT,

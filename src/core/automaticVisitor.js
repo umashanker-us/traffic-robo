@@ -24,7 +24,7 @@ const path = require('path');
 const fs = require('fs');
 const { getLogger, getCampaignLogDir } = require('../helpers/logger');
 const Constants = require('../helpers/constants');
-const { ProxyRouter, isGACollectRequest, isGAScript, createPlaywrightProxy, parseProxyString } = require('../helpers/proxyRouter');
+const { ProxyRouter, isGACollectRequest, isGAScript, createPlaywrightProxy, parseProxyString, parseCustomProxyPatterns, matchesCustomProxyPattern, resolveTrackerChain } = require('../helpers/proxyRouter');
 const { generateIndianIP } = require('../helpers/indianIP');
 const { SessionReplay } = require('../helpers/sessionReplay');
 const { patchCollectUrlForReturning } = require('../helpers/collectPatch');
@@ -87,6 +87,12 @@ class AutomaticVisitor {
         this.proxyUrl = config.proxyUrl || '';
         this.proxyConfig = this.proxyEnabled ? parseProxyString(this.proxyUrl) : null;
         this.proxyRouter = null;
+
+        // Custom proxy URL patterns (CM360 / ad trackers) — extra hosts routed through proxy
+        this.customProxyEnabled = config.customProxyEnabled || false;
+        this.customProxyPatterns = this.customProxyEnabled
+            ? parseCustomProxyPatterns(config.customProxyPatterns || '')
+            : [];
         
         // Extension settings - NEW: SimilarWeb support
         this.extensionEnabled = config.extensionEnabled || false;
@@ -251,9 +257,13 @@ class AutomaticVisitor {
 
             // CRITICAL: Check if this is a BOUNCE visit
             if (this.visit.isBounce()) {
-                // Bounce visit - NO WAIT, exit immediately
+                // Bounce visit - NO WAIT, exit immediately.
+                // Measure from _pageStartTime (the navigation start) so the UI's bounce
+                // duration matches what GA4 actually sees as engagement_time_msec.
+                // Browser launch + context creation is not part of session time in GA4.
                 this.logger.info(`🔴 BOUNCE VISIT - Exiting immediately (no additional pages, no wait)`);
-                this.replay.logBounce(Date.now() - startTime);
+                const bounceTimeOnPage = Date.now() - (this._pageStartTime || startTime);
+                this.replay.logBounce(bounceTimeOnPage);
             } else {
                 // Non-bounce visit - time-budget aware waiting
                 // The configured wait IS the total time per page (including load + GA4 + behavior)
@@ -358,8 +368,8 @@ class AutomaticVisitor {
 
         try {
             await this.page.goto(prevUrl, {
-                waitUntil: 'networkidle',  // Wait for all network requests
-                timeout: 45000
+                waitUntil: 'domcontentloaded',
+                timeout: 20000
             });
 
             // CRITICAL: Wait for GA4 cookies to be set
@@ -380,16 +390,57 @@ class AutomaticVisitor {
      * CRITICAL: Must wait for GA4 scripts to load and fire events
      */
     async _visitFirstPage() {
-        this.logger.info(`Navigating to campaign URL: ${this.campaignUrl}`);
+        // If campaign URL is a click tracker (matches custom-proxy patterns),
+        // walk the redirect chain through the proxy in Node first. Each hop
+        // registers with the proxy IP (ad attribution correct). Browser then
+        // loads only the FINAL landing URL — direct, fast, no CONNECT-tunnel
+        // dependency. Tracking params (dclid, UTMs) survive because they're
+        // appended by the 302 Location headers and end up in the final URL.
+        let urlToNavigate = this.campaignUrl;
+        if (this.customProxyEnabled && this.proxyConfig && this.customProxyPatterns.length > 0
+            && matchesCustomProxyPattern(this.campaignUrl, this.customProxyPatterns)) {
+            try {
+                const chainResult = await resolveTrackerChain(
+                    this.campaignUrl,
+                    this.proxyConfig,
+                    this.customProxyPatterns,
+                    this.logger
+                );
+                urlToNavigate = chainResult.finalUrl;
+                this.logger.info(`Tracker chain resolved via proxy: ${chainResult.hops.length} hop(s) → ${urlToNavigate.substring(0, 120)}`);
+                for (const h of chainResult.hops) {
+                    this.logger.debug(`  Hop ${h.status}: ${h.url.substring(0, 100)}`);
+                }
+            } catch (e) {
+                this.logger.warn(`Tracker chain resolution failed: ${e.message} — falling back to direct navigation`);
+            }
+        }
+
+        this.logger.info(`Navigating to campaign URL: ${urlToNavigate}`);
         // Track page start time — used by execute() for time-budget calculation
         this._pageStartTime = Date.now();
         const isBounce = this.visit.isBounce();
 
         try {
-            // Bounce visits: use 'domcontentloaded' — proceed as soon as HTML is parsed
-            // Non-bounce visits: use 'load' — wait for full page (images, CSS, etc.)
+            // Bounce visits: use 'domcontentloaded' — proceed as soon as HTML is parsed.
+            // 8s nav timeout is a hard ceiling; the overall bounce budget (9.5s total
+            // from _pageStartTime) still keeps the visit under GA4's 10s engagement
+            // threshold even on slow proxies.
             const waitStrategy = isBounce ? 'domcontentloaded' : 'load';
-            const navTimeout = isBounce ? 15000 : 60000;
+            const navTimeout = isBounce ? 8000 : 60000;
+
+            // For bounce visits we MUST wait for at least one /collect response to
+            // actually round-trip GA4's server before closing the browser, otherwise
+            // the in-flight request is canceled and the visit never registers. Arm
+            // the listener BEFORE navigation so we don't miss an early page_view.
+            // 7s waitForResponse timeout fits within the 9.5s total bounce budget.
+            this._collectResponsePromise = null;
+            if (isBounce && this.page) {
+                this._collectResponsePromise = this.page.waitForResponse(
+                    r => isGACollectRequest(r.url()),
+                    { timeout: 7000 }
+                ).catch(() => null);
+            }
 
             // Handle referer navigation — only visit referer page if visitReferer is true
             if (this.visitReferer && this.referer) {
@@ -400,14 +451,21 @@ class AutomaticVisitor {
                 if (!isBounce) await this._sleep(1000); // Brief pause on referer page (skip for bounce)
                 await this.page.evaluate((url) => {
                     window.location.href = url;
-                }, this.campaignUrl);
+                }, urlToNavigate);
                 await this.page.waitForLoadState(waitStrategy, { timeout: navTimeout });
             } else {
-                await this.page.goto(this.campaignUrl, {
+                await this.page.goto(urlToNavigate, {
                     waitUntil: waitStrategy,
                     timeout: navTimeout
                 });
             }
+
+            // Resolve true primary domain from the landed URL — if campaignUrl
+            // was a CM360 / ad-tracker click URL, page.url() now points at the
+            // real destination after the 302 redirect chain. Everything that
+            // depends on primary domain (internal-link traversal, replay logs)
+            // must use the landed domain, not the click tracker's domain.
+            this._resolveLandedDomain();
 
             // CRITICAL: Wait for GA4/GTM scripts to initialize and fire events
             // For bounce visits, use fast poll to stay UNDER 10 seconds total
@@ -437,8 +495,10 @@ class AutomaticVisitor {
                 this.logger.info(`Page title: ${pageTitle}`);
                 this.logger.info(`Current URL: ${currentUrl}`);
 
-                // Non-bounce - real user behavior simulation
-                await this._simulateUserBehavior();
+                // Pass remaining per-page budget so behavior scales down on
+                // tight budgets instead of always burning ~5s.
+                const behaviorBudgetMs = this.visit.getWaitTimePerPageMs() - (Date.now() - this._pageStartTime);
+                await this._simulateUserBehavior(behaviorBudgetMs);
             }
 
         } catch (error) {
@@ -512,10 +572,11 @@ class AutomaticVisitor {
                 this.logger.info(`Navigating to page ${i + 2}: ${linkUrl}`);
                 const pageStartTime = Date.now();
 
-                // Navigate to the link - Wait for full page load + network
+                // Navigate to the link — domcontentloaded is enough; networkidle stalls
+                // on real sites with ads/polling and eats the per-page time budget.
                 await this.page.goto(linkUrl, {
-                    waitUntil: 'networkidle',
-                    timeout: 45000
+                    waitUntil: 'domcontentloaded',
+                    timeout: 20000
                 });
 
                 // CRITICAL: Wait for GA4 to fire page_view event
@@ -527,11 +588,13 @@ class AutomaticVisitor {
                 this.replay.logNavigation(linkUrl, loadTimeMs, pageTitle);
                 this.logger.info(`✅ Page ${i + 2} loaded: ${loadTime.toFixed(2)}s - ${linkUrl}`);
 
-                // Simulate user behavior on the new page
-                await this._simulateUserBehavior();
+                // Pass remaining per-page budget so behavior scales down on
+                // tight budgets instead of always burning ~5s.
+                const configuredWaitMs = this.visit.getWaitTimePerPageMs();
+                const behaviorBudgetMs = configuredWaitMs - (Date.now() - pageStartTime);
+                await this._simulateUserBehavior(behaviorBudgetMs);
 
                 // Time-budget: configured wait IS total time per page (load + GA4 + behavior included)
-                const configuredWaitMs = this.visit.getWaitTimePerPageMs();
                 const elapsedMs = Date.now() - pageStartTime;
                 const remainingMs = configuredWaitMs - elapsedMs;
                 const MIN_PAGE_TIME = 3000;
@@ -685,19 +748,14 @@ class AutomaticVisitor {
 
         // STEP 1: Wait for DOM to be complete
         try {
-            await this.page.waitForFunction(() => document.readyState === 'complete', { timeout: 15000 });
+            await this.page.waitForFunction(() => document.readyState === 'complete', { timeout: 10000 });
             this.logger.debug(`DOM complete: ${Date.now() - startTime}ms`);
         } catch (e) {
             this.logger.debug(`DOM readyState timeout`);
         }
-        
-        // STEP 2: Wait for network to become idle (all scripts loaded)
-        try {
-            await this.page.waitForLoadState('networkidle', { timeout: 15000 });
-            this.logger.debug(`Network idle: ${Date.now() - startTime}ms`);
-        } catch (e) {
-            this.logger.debug(`Network idle timeout, continuing...`);
-        }
+        // STEP 2 removed — networkidle on real sites (ads, widgets, polling fetches) often
+        // never reaches idle and times out at 15s, adding huge per-page overhead. DOM-ready
+        // plus the GA4 beacon sleep below is sufficient for the page_view event to fire.
         
         // STEP 3: Check for GA4/GTM and wait for events to fire
         let gaDetected = false;
@@ -722,28 +780,28 @@ class AutomaticVisitor {
             // Ignore
         }
 
-        // STEP 4: MANDATORY wait for GA4 events to fire
-        // This is CRITICAL - GA4 needs time after script load to:
-        // - Initialize tracking
-        // - Fire page_view event
-        // - Send beacon request
+        // STEP 4: Wait for GA4 events to fire. Budget-aware: long fixed 3-5s sleep was
+        // blowing past the per-page time budget on short-configured visits (e.g. 36s avg
+        // / 6 pages = 6s/page budget, but 5s sleep + 5s load → 10s/page actual).
+        // Floor 1.5s guarantees gtag.js has time to flush the beacon.
+        const MIN_BEACON_WAIT = 1500;
+        const MAX_BEACON_WAIT = 5000;
+        const budgetMs = (this.visit && this.visit.getWaitTimePerPageMs) ? this.visit.getWaitTimePerPageMs() : MAX_BEACON_WAIT;
+        const targetWait = Math.max(MIN_BEACON_WAIT, Math.min(MAX_BEACON_WAIT, Math.floor(budgetMs * 0.5)));
+
         if (gaDetected) {
-            const gaWait = 3000 + Math.random() * 2000; // 3-5 seconds
+            const gaWait = targetWait + Math.random() * 500;
             this.logger.info(`✅ GA4/GTM detected - waiting ${(gaWait/1000).toFixed(1)}s for tracking events...`);
             await this._sleep(gaWait);
         } else {
-            // No GA detected - still wait minimum time (page might load GA dynamically)
-            const minWait = 2000 + Math.random() * 1000; // 2-3 seconds
+            const minWait = Math.max(1000, Math.min(2500, Math.floor(budgetMs * 0.3)));
             this.logger.info(`⚠️ No GA4/GTM detected - waiting ${(minWait/1000).toFixed(1)}s anyway...`);
             await this._sleep(minWait);
         }
-        
-        // STEP 5: Final network check - ensure beacon requests completed
-        try {
-            await this.page.waitForLoadState('networkidle', { timeout: 5000 });
-        } catch (e) {
-            // OK if this times out
-        }
+
+        // STEP 5 removed — same networkidle reasoning as STEP 2 above. The GA4 beacon
+        // sleep is enough for the /collect request to be initiated; final teardown does
+        // not need to wait for unrelated ad/widget network activity.
         
         const totalWait = Date.now() - startTime;
         this.replay.logGA4Detection(gaDetected, { ...gaDetails, waitTimeMs: totalWait });
@@ -751,25 +809,41 @@ class AutomaticVisitor {
     }
 
     /**
-     * Fast GA4 wait for bounce visits — poll then exit (1-4 seconds total)
+     * Fast GA4 wait for bounce visits — poll for script, then wait for the
+     * actual /collect response round-trip before exiting.
      *
-     * Strategy: Poll every 500ms for GA4 script presence (max 3 seconds).
-     * As soon as GA4 detected OR timeout: wait 1-1.5s for page_view beacon.
-     * NO DOM complete, NO networkidle, NO scrolling, NO mouse movement.
-     * CRITICAL: Keeps total bounce page time UNDER 10 seconds so GA4 counts it as bounce.
+     * Previously we only waited 1-1.5s after detecting gtag.js, assuming the
+     * beacon had fired. In practice gtag.js batches events (default flush ~5s)
+     * and the network round-trip to GA4 servers adds 200-500ms — so the request
+     * was getting canceled by browser teardown and bounce visits never reached
+     * GA4. That's what produced the 100→71 visit gap.
+     *
+     * New strategy: arm a waitForResponse(/collect) listener in _visitFirstPage
+     * BEFORE navigation, poll for the GA4 script here, then wait for that
+     * response to actually complete (max 9s budget to stay under the 10s
+     * engagement threshold that would flip the session to "engaged").
      */
     async _waitForGA4Bounce() {
         if (!this.page) return;
         const startTime = Date.now();
-        this.logger.info(`⏳ Bounce: polling for GA4 (max 3s)...`);
+        // Anchor everything to page navigation start so the TOTAL bounce time
+        // (goto + this function + cleanup) stays under GA4's 10s engagement threshold.
+        // 9.5s hard cap from _pageStartTime — gives proxy /collect round-trip enough
+        // headroom to land before close (was 8s, beacons were dropping under load),
+        // while staying below GA4's 10s engaged-session threshold.
+        const TOTAL_BOUNCE_CAP_MS = 9500;
+        const pageStart = this._pageStartTime || startTime;
+        const remainingTotalBudget = () => Math.max(0, TOTAL_BOUNCE_CAP_MS - (Date.now() - pageStart));
+        this.logger.info(`⏳ Bounce: polling for GA4 (budget ${(remainingTotalBudget()/1000).toFixed(1)}s)...`);
 
-        // Poll every 500ms for GA4 script presence, max 3 seconds (6 polls)
+        // Poll every 400ms for GA4 script presence — capped at half remaining budget
+        // so /collect round-trip still has room to complete.
         let gaDetected = false;
         let gaDetails = {};
-        const maxPollTime = 3000;
-        const pollInterval = 500;
+        const pollInterval = 400;
+        const maxPollTime = Math.max(800, Math.floor(remainingTotalBudget() * 0.4));
 
-        while (Date.now() - startTime < maxPollTime) {
+        while (Date.now() - startTime < maxPollTime && remainingTotalBudget() > 1000) {
             try {
                 gaDetails = await this.page.evaluate(() => {
                     return {
@@ -795,20 +869,28 @@ class AutomaticVisitor {
 
         const detectTime = ((Date.now() - startTime) / 1000).toFixed(1);
 
-        // Brief wait for page_view beacon to fire
-        if (gaDetected) {
-            const beaconWait = 1000 + Math.random() * 500; // 1-1.5 seconds
-            this.logger.info(`✅ GA4 detected in ${detectTime}s, waiting ${(beaconWait/1000).toFixed(1)}s for beacon`);
-            await this._sleep(beaconWait);
-        } else {
-            const minWait = 500 + Math.random() * 500; // 0.5-1 seconds
-            this.logger.info(`⚠️ No GA4 after ${detectTime}s, waiting ${(minWait/1000).toFixed(1)}s then exiting`);
-            await this._sleep(minWait);
+        // Wait for /collect round-trip, but never exceed the total bounce cap.
+        const remainingMs = remainingTotalBudget();
+        let collectConfirmed = false;
+
+        if (this._collectResponsePromise && remainingMs > 0) {
+            this.logger.info(`✅ GA4 detected in ${detectTime}s — waiting up to ${(remainingMs/1000).toFixed(1)}s for /collect round-trip`);
+            const cutoff = new Promise(resolve => setTimeout(() => resolve(null), remainingMs));
+            const response = await Promise.race([this._collectResponsePromise, cutoff]);
+            if (response) {
+                collectConfirmed = true;
+                this.logger.info(`✅ /collect delivered (status ${response.status?.() ?? 'unknown'}) — safe to close`);
+            } else {
+                this.logger.warn(`⚠️ /collect did not complete within budget — beacon may not have reached GA4`);
+            }
+        } else if (!gaDetected) {
+            // Nothing to wait for — give a brief settle period so any late script can fire
+            await this._sleep(500);
         }
 
         const totalWait = Date.now() - startTime;
-        this.replay.logGA4Detection(gaDetected, { ...gaDetails, waitTimeMs: totalWait, bounce: true });
-        this.logger.info(`BOUNCE: exiting after ${(totalWait/1000).toFixed(1)}s total (under 10s ✅)`);
+        this.replay.logGA4Detection(gaDetected, { ...gaDetails, waitTimeMs: totalWait, bounce: true, collectConfirmed });
+        this.logger.info(`BOUNCE: exiting after ${(totalWait/1000).toFixed(1)}s total (collectConfirmed=${collectConfirmed})`);
     }
 
     /**
@@ -858,62 +940,82 @@ class AutomaticVisitor {
     }
 
     /**
-     * Simulate realistic user behavior on page
-     * More human-like with proper timing
+     * Simulate realistic user behavior on page.
+     *
+     * Takes the remaining per-page budget (ms) — the time left after page load
+     * and GA4 beacon wait. Fixed 3-7s of sleeps here was the dominant source of
+     * Actual avg session duration overshooting the configured target: even when
+     * load + GA4 finished within budget, behavior alone consumed the rest of
+     * the budget and then some.
+     *
+     *   budget < 1500ms → minimal (one quick scroll for GA4 scroll tracking)
+     *   1500–5000ms     → scaled sleeps proportional to budget
+     *   ≥ 5000ms        → full behavior
+     *
+     * The final budget-fill sleep in the caller picks up any slack, so it's
+     * safe to undershoot here.
      */
-    async _simulateUserBehavior() {
+    async _simulateUserBehavior(budgetMs = 6000) {
+        const startedAt = Date.now();
         try {
-            // Initial pause - user looks at page (1-2 seconds)
-            await this._sleep(1000 + Math.random() * 1000);
-            
-            // Mouse movement - user moves cursor
+            if (budgetMs < 1500) {
+                try {
+                    await this.page.evaluate(() => {
+                        window.scrollBy({ top: 400, behavior: 'auto' });
+                    });
+                } catch (e) { /* ignore */ }
+                return;
+            }
+
+            const TARGET_FULL_BUDGET = 5000;
+            const scale = Math.min(1.0, budgetMs / TARGET_FULL_BUDGET);
+
+            const sleepIfBudget = async (ms) => {
+                if (Date.now() - startedAt + ms > budgetMs) return;
+                await this._sleep(ms);
+            };
+
+            await sleepIfBudget(Math.floor((1000 + Math.random() * 1000) * scale));
             await this._simulateMouseMovement();
-            
-            // Reading pause (0.5-1.5 seconds)
-            await this._sleep(500 + Math.random() * 1000);
-            
-            // Scroll down - triggers GA4 scroll tracking
-            await this._simulateScrolling();
-            
-            // Final pause - user finishes reading (0.5-1 second)
-            await this._sleep(500 + Math.random() * 500);
-            
+            await sleepIfBudget(Math.floor((500 + Math.random() * 1000) * scale));
+            await this._simulateScrolling(scale);
+            await sleepIfBudget(Math.floor((500 + Math.random() * 500) * scale));
+
         } catch (error) {
             this.logger.debug(`User behavior simulation error: ${error.message}`);
         }
     }
 
     /**
-     * Simulate scrolling - GA4 tracks scroll depth
-     * More realistic scrolling pattern
+     * Simulate scrolling - GA4 tracks scroll depth.
+     * `scale` (0..1) shrinks the sleeps when the per-page budget is tight.
+     * Scrolls themselves still fire (GA4 needs the events); only inter-scroll
+     * pauses scale. The third scroll is skipped when budget is very tight.
      */
-    async _simulateScrolling() {
+    async _simulateScrolling(scale = 1.0) {
         try {
-            // Scroll 1: Initial scroll (like reading below fold)
             const scroll1 = 300 + Math.floor(Math.random() * 400);
             await this.page.evaluate((amount) => {
                 window.scrollBy({ top: amount, behavior: 'smooth' });
             }, scroll1);
-            await this._sleep(800 + Math.random() * 600);
-            
-            // Scroll 2: Continue scrolling
+            await this._sleep(Math.floor((800 + Math.random() * 600) * scale));
+
             const scroll2 = 500 + Math.floor(Math.random() * 700);
             await this.page.evaluate((amount) => {
                 window.scrollBy({ top: amount, behavior: 'smooth' });
             }, scroll2);
-            await this._sleep(600 + Math.random() * 500);
-            
-            // Scroll 3: Maybe scroll more or back up
-            if (Math.random() > 0.3) {
-                const scroll3 = Math.random() > 0.5 
-                    ? (400 + Math.floor(Math.random() * 600))  // More down
-                    : -(200 + Math.floor(Math.random() * 300)); // Back up
+            await this._sleep(Math.floor((600 + Math.random() * 500) * scale));
+
+            if (scale > 0.5 && Math.random() > 0.3) {
+                const scroll3 = Math.random() > 0.5
+                    ? (400 + Math.floor(Math.random() * 600))
+                    : -(200 + Math.floor(Math.random() * 300));
                 await this.page.evaluate((amount) => {
                     window.scrollBy({ top: amount, behavior: 'smooth' });
                 }, scroll3);
-                await this._sleep(400 + Math.random() * 400);
+                await this._sleep(Math.floor((400 + Math.random() * 400) * scale));
             }
-            
+
         } catch (error) {
             this.logger.debug(`Scroll error: ${error.message}`);
         }
@@ -1028,25 +1130,36 @@ class AutomaticVisitor {
      * 3. Proper proxy implementation using Playwright's built-in proxy
      */
     async _createContext() {
+        const isHeadless = this.playMode === Constants.PLAY_MODES.FASTEST ||
+                          this.playMode === Constants.PLAY_MODES.FAST;
+        const isMobileUA = this.userAgent.includes('Mobile');
         const contextOptions = {
-            viewport: {
-                width: this.screenSize.width,
-                height: this.screenSize.height
-            },
             userAgent: this.userAgent,
             // FIXED: Use location from config
             locale: this.locationData.locale,
             timezoneId: this.locationData.timezone,
-            geolocation: { 
-                latitude: this.locationData.latitude, 
-                longitude: this.locationData.longitude 
+            geolocation: {
+                latitude: this.locationData.latitude,
+                longitude: this.locationData.longitude
             },
             permissions: ['geolocation'],
             javaScriptEnabled: true,
-            hasTouch: this.userAgent.includes('Mobile'),
-            isMobile: this.userAgent.includes('Mobile'),
-            deviceScaleFactor: this.userAgent.includes('Mobile') ? 2 : 1
         };
+        // Headed: viewport=null lets the real window dimensions drive layout,
+        // so the site renders to actual content area (not clipped by chrome UI).
+        // Playwright forbids deviceScaleFactor/isMobile/hasTouch with null viewport,
+        // so those are only set in headless mode where we control the viewport.
+        if (isHeadless) {
+            contextOptions.viewport = {
+                width: this.screenSize.width,
+                height: this.screenSize.height
+            };
+            contextOptions.hasTouch = isMobileUA;
+            contextOptions.isMobile = isMobileUA;
+            contextOptions.deviceScaleFactor = isMobileUA ? 2 : 1;
+        } else {
+            contextOptions.viewport = null;
+        }
 
         this.logger.info(`Viewport: ${this.screenSize.width}x${this.screenSize.height} | UA: ${this.userAgent.substring(0, 50)}... | Mobile: ${this.userAgent.includes('Mobile')}`);
 
@@ -1074,7 +1187,10 @@ class AutomaticVisitor {
         }
         
         // Proxy: NO context-level proxy — /collect requests handled in route handler
-        // This means page loads DIRECT, only tiny /collect beacons go through proxy
+        // This means page loads DIRECT, only tiny /collect beacons go through proxy.
+        // For Custom Proxy URLs (click trackers): redirect chain is pre-resolved
+        // through proxy in Node before page.goto, so trackers see proxy IP but
+        // browser loads only the final landing page DIRECT. See _resolveTrackerChain.
 
         this.context = await this.browser.newContext(contextOptions);
 
@@ -1171,6 +1287,30 @@ class AutomaticVisitor {
                     }
                     return;
                 }
+                // Custom proxy URL patterns (CM360 / ad trackers) for SUBRESOURCE
+                // requests fired during page load (pixels, tracking beacons).
+                // The initial click-tracker NAVIGATION is pre-resolved in Node
+                // before page.goto (see _visitFirstPage), so this branch only
+                // runs for in-page tracker requests — never for top-frame nav.
+                if (self.customProxyEnabled && self.customProxyPatterns.length > 0 &&
+                    matchesCustomProxyPattern(url, self.customProxyPatterns)) {
+                    self.proxyRouter.stats.totalRequests++;
+                    self.proxyRouter.stats.proxiedRequests++;
+                    try {
+                        const response = await self.proxyRouter.makeProxiedRequest(request);
+                        await route.fulfill({
+                            status: response.status,
+                            headers: response.headers,
+                            body: response.body,
+                        });
+                        self.logger.debug(`Custom-proxy hop: ${url.substring(0, 100)} → ${response.status}`);
+                    } catch (e) {
+                        self.logger.debug(`Custom-proxy hop failed, fallback direct: ${e.message}`);
+                        try { await route.continue(); } catch {}
+                    }
+                    return;
+                }
+
                 // Non-collect (including GA scripts) → DIRECT
                 self.proxyRouter.stats.totalRequests++;
                 self.proxyRouter.stats.directRequests++;
@@ -1335,6 +1475,14 @@ class AutomaticVisitor {
             this._extractedCookies = [];
             return;
         }
+        // Bounce visits live ~1-3s and may close before GA4 server-side records the cdid.
+        // Reusing such a cdid as a "returning" cookie makes GA4 see it for the first time
+        // and classify it as a new user, which is what was dropping the returning-detection rate.
+        if (this.visit && this.visit.isBounce()) {
+            this.logger.info(`COOKIE EXTRACT: Skipping — bounce visit, cdid likely not registered by GA4`);
+            this._extractedCookies = [];
+            return;
+        }
         try {
             this.logger.info(`COOKIE EXTRACT: Extracting cookies before context close...`);
             const all = await this.context.cookies();
@@ -1371,6 +1519,22 @@ class AutomaticVisitor {
         } catch {
             return '';
         }
+    }
+
+    /**
+     * After the initial navigation settles, re-derive primaryDomain from the
+     * real landed URL. When campaignUrl is a CM360 / ad-tracker URL, the 302
+     * redirect chain lands somewhere else — internal-link traversal and the
+     * replay log must reflect the real destination, not the click tracker.
+     */
+    _resolveLandedDomain() {
+        if (!this.page) return;
+        const landedUrl = this.page.url();
+        const landedDomain = this._extractDomain(landedUrl);
+        if (!landedDomain || landedDomain === this.primaryDomain) return;
+        this.logger.info(`Domain resolved after redirect: ${this.primaryDomain} → ${landedDomain}`);
+        this.primaryDomain = landedDomain;
+        this.landedUrl = landedUrl;
     }
 
     /**

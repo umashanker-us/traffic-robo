@@ -2,10 +2,15 @@
  * Patch GA4 /collect URL parameters so a returning-user visit doesn't get
  * recorded as a brand-new session.
  *
- *   _fv   → removed   (first_visit event trigger)
+ *   _fv   → removed   (first_visit event trigger — only new users fire this)
  *   sct=1 → sct=2     (session_count: 1 = new, 2 = returning)
  *   _nsi=1 → _nsi=0   (new_session_indicator)
- *   seg=0  → seg=1    (engaged session flag)
+ *
+ * `seg` (engaged session flag) is intentionally NOT patched — gtag.js sets
+ * `seg=0` until the session actually engages (≥10s, conversion, or ≥2 pageviews),
+ * then flips to `seg=1` on its own. Forcing `seg=1` on every event made bounce
+ * visits of returning users show as engaged in GA4, distorting engagement rate
+ * and average session duration. Leave it alone so GA4 reports accurate metrics.
  *
  * Returns the modified URL if any param was changed, or null if nothing
  * needed patching (callers skip the route override fast-path).
@@ -34,10 +39,6 @@ function patchCollectUrlForReturning(url) {
     }
     if (params.get('_nsi') === '1') {
         params.set('_nsi', '0');
-        changed = true;
-    }
-    if (params.get('seg') === '0') {
-        params.set('seg', '1');
         changed = true;
     }
 

@@ -18,6 +18,8 @@ const {
     isGAScript,
     parseProxyString,
     createPlaywrightProxy,
+    parseCustomProxyPatterns,
+    matchesCustomProxyPattern,
     GA_COLLECT_DOMAINS,
     GA_COLLECT_PATHS,
     GA_SCRIPTS_DIRECT,
@@ -414,5 +416,75 @@ describe('GA Constants', () => {
         expect(GA_SCRIPTS_DIRECT).toContain('/gtm.js');
         expect(GA_SCRIPTS_DIRECT).toContain('/analytics.js');
         expect(GA_SCRIPTS_DIRECT).toContain('/ga.js');
+    });
+});
+
+// ============================================================
+// parseCustomProxyPatterns() Tests
+// ============================================================
+describe('parseCustomProxyPatterns()', () => {
+    test('returns empty array for empty/null/undefined', () => {
+        expect(parseCustomProxyPatterns('')).toEqual([]);
+        expect(parseCustomProxyPatterns(null)).toEqual([]);
+        expect(parseCustomProxyPatterns(undefined)).toEqual([]);
+    });
+
+    test('returns empty array for non-string input', () => {
+        expect(parseCustomProxyPatterns(123)).toEqual([]);
+        expect(parseCustomProxyPatterns([])).toEqual([]);
+    });
+
+    test('splits on newlines and trims each line', () => {
+        const raw = `  ad.doubleclick.net/ddm/trackclk\n  N768950\ngoogleads.g.doubleclick.net  `;
+        expect(parseCustomProxyPatterns(raw)).toEqual([
+            'ad.doubleclick.net/ddm/trackclk',
+            'n768950',
+            'googleads.g.doubleclick.net',
+        ]);
+    });
+
+    test('lowercases everything for case-insensitive matching', () => {
+        expect(parseCustomProxyPatterns('AD.DoubleClick.Net/DDM')).toEqual(['ad.doubleclick.net/ddm']);
+    });
+
+    test('drops blank lines and # comment lines', () => {
+        const raw = `# comment\n\nad.doubleclick.net\n#another\npattern2`;
+        expect(parseCustomProxyPatterns(raw)).toEqual(['ad.doubleclick.net', 'pattern2']);
+    });
+
+    test('handles CRLF line endings', () => {
+        expect(parseCustomProxyPatterns('a\r\nb\r\nc')).toEqual(['a', 'b', 'c']);
+    });
+});
+
+// ============================================================
+// matchesCustomProxyPattern() Tests
+// ============================================================
+describe('matchesCustomProxyPattern()', () => {
+    test('returns false when patterns array is empty/null', () => {
+        expect(matchesCustomProxyPattern('https://example.com', [])).toBe(false);
+        expect(matchesCustomProxyPattern('https://example.com', null)).toBe(false);
+    });
+
+    test('matches when URL contains any pattern as substring', () => {
+        const patterns = ['ad.doubleclick.net/ddm/trackclk', 'sigmamedia'];
+        const url = 'https://ad.doubleclick.net/ddm/trackclk/N768950.5559725SIGMAMEDIA/B35815920';
+        expect(matchesCustomProxyPattern(url, patterns)).toBe(true);
+    });
+
+    test('case-insensitive (URL upper, patterns already lower)', () => {
+        const patterns = ['ad.doubleclick.net'];
+        expect(matchesCustomProxyPattern('HTTPS://AD.DOUBLECLICK.NET/path', patterns)).toBe(true);
+    });
+
+    test('returns false when no pattern matches', () => {
+        const patterns = ['ad.doubleclick.net', 'sigmamedia'];
+        expect(matchesCustomProxyPattern('https://example.com/page', patterns)).toBe(false);
+    });
+
+    test('a CM360 redirect chain hop matches even if mid-URL', () => {
+        const patterns = ['n768950'];
+        const hopUrl = 'https://googleads.g.doubleclick.net/pagead/aclk?N768950foo';
+        expect(matchesCustomProxyPattern(hopUrl, patterns)).toBe(true);
     });
 });

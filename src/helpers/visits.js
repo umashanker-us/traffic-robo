@@ -152,25 +152,26 @@ function generateVisitsArray(avgSessionDuration, bounceRate, pagePerSession) {
     }
 
     // 5. Add variable page visits
-    // Java: 
-    // Double d2 = Math.floor(Math.random() * (double) (4.0f * pagePerSession - 10.0f) + 5.0);
-    // if (d2 < 2.0) { d2 = 1.0; }  // Note: Java uses 1.0, but we use 2 to avoid false bounces
-    // duration = Math.floor(1.5 * avgSessionDuration / (1.0f - bounceRate/100.0f))
+    // Java port originally used `1.5 * avgSessionDuration / (1 - bounceRate/100)` here.
+    // The 1.5x multiplier inflated the non-bounce average ~40-60% above the configured
+    // value. Removed: n9 duration now equals avgSessionDuration / bounceRatio.
+    //
+    // Pages are also capped so each page gets at least ~8s of budget — page load
+    // (3-5s) + GA4 beacon wait (~1.5-2s) is a hard floor, so picking too many pages
+    // on a short configured duration guarantees the actual wall-clock blows past
+    // the configured average.
+    const MIN_BUDGET_PER_PAGE_S = 8;
     for (let i = 0; i < n9; i++) {
-        // Calculate pages: random value from formula
-        // Range: 5 to (4*pagePerSession - 5) approximately
         let pages = Math.floor(Math.random() * (4.0 * pagePerSession - 10.0) + 5.0);
-        
-        // Minimum 2 pages to ensure this is NOT counted as bounce
         if (pages < 2) {
             pages = 2;
         }
-        
-        // Calculate extended duration for engaged users
-        // Java: 1.5 * avgSessionDuration / (1.0f - bounceRate/100.0f)
         const bounceRatio = 1.0 - (bounceRate / 100.0);
-        const duration = Math.floor((1.5 * avgSessionDuration) / bounceRatio);
-        
+        const duration = Math.floor(avgSessionDuration / bounceRatio);
+        const maxPages = Math.max(2, Math.floor(duration / MIN_BUDGET_PER_PAGE_S));
+        if (pages > maxPages) {
+            pages = maxPages;
+        }
         visits.push(new Visit(pages, duration));
     }
 

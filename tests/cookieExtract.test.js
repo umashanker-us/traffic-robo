@@ -53,4 +53,25 @@ describe('_extractCookiesBeforeClose cookie filter', () => {
         await v._extractCookiesBeforeClose();
         expect(v.getCookies()).toEqual([]);
     });
+
+    test('skips extraction when visit is a bounce — bounce cdids pollute returning pool', async () => {
+        const v = makeVisitor([
+            { name: '_ga', value: 'GA1.2.1234567890.1700000000', domain: '.example.com', path: '/' },
+        ]);
+        v.visit = { isBounce: () => true };
+
+        await v._extractCookiesBeforeClose();
+        expect(v.getCookies()).toEqual([]);
+    });
+
+    test('extracts normally when visit is non-bounce', async () => {
+        const v = makeVisitor([
+            { name: '_ga', value: 'GA1.2.1234567890.1700000000', domain: '.example.com', path: '/' },
+        ]);
+        v.visit = { isBounce: () => false };
+
+        await v._extractCookiesBeforeClose();
+        expect(v.getCookies()).toHaveLength(1);
+        expect(v.getCookies()[0].name).toBe('_ga');
+    });
 });
