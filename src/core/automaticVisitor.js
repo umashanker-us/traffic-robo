@@ -900,41 +900,32 @@ class AutomaticVisitor {
      */
     async _verifyExtension() {
         try {
-            // Wait a bit for extension to inject content script
-            await this._sleep(500);
-            
-            // Check for SimilarWeb extension markers
+            await this._sleep(1500);
+
+            // Content scripts run in an isolated JS world — they share the DOM
+            // but NOT `window` with page.evaluate(). So window.__sw_* flags are
+            // invisible here. Detect via DOM evidence that the content script
+            // actually injected (data attribute + tracking pixel).
             const extensionStatus = await this.page.evaluate(() => {
                 return {
-                    // Content script markers
-                    injected: window.__similarweb_injected === true,
-                    swExtension: window.__sw_extension === true,
-                    swVersion: window.__sw_version || null,
                     dataAttribute: document.documentElement.getAttribute('data-similarweb') === 'true',
-                    
-                    // Check for any extension-injected elements
                     hasPixel: !!document.querySelector('img[src*="similarweb.com"]'),
-                    
-                    // Check console for extension logs
-                    hasMarkers: !!(window.__similarweb_injected || window.__sw_extension)
                 };
             });
-            
-            if (extensionStatus.hasMarkers) {
+
+            const detected = extensionStatus.dataAttribute || extensionStatus.hasPixel;
+            if (detected) {
                 this.logger.info(`🧩 ✅ Extension WORKING!`);
-                this.logger.info(`   ├─ Injected: ${extensionStatus.injected}`);
-                this.logger.info(`   ├─ SW Extension: ${extensionStatus.swExtension}`);
-                this.logger.info(`   ├─ Version: ${extensionStatus.swVersion || 'N/A'}`);
-                this.logger.info(`   ├─ Data Attribute: ${extensionStatus.dataAttribute}`);
+                this.logger.info(`   ├─ data-similarweb attr: ${extensionStatus.dataAttribute}`);
                 this.logger.info(`   └─ Tracking Pixel: ${extensionStatus.hasPixel}`);
             } else {
                 this.logger.warn(`🧩 ⚠️ Extension NOT DETECTED on page`);
                 this.logger.warn(`   This could mean:`);
                 this.logger.warn(`   1. Extension failed to load`);
-                this.logger.warn(`   2. Content script blocked by page`);
+                this.logger.warn(`   2. Content script blocked by page CSP`);
                 this.logger.warn(`   3. Wrong extension path`);
             }
-            
+
         } catch (error) {
             this.logger.debug(`Extension verification error: ${error.message}`);
         }
