@@ -324,11 +324,18 @@ class ManualVisitor {
             this.browser = this.context.browser();
             this.logger.info(`Persistent context launched with extension (userDataDir: ${this._tempUserDataDir})`);
 
-            // Close extension welcome/onboarding tabs (see automaticVisitor for details)
-            await new Promise(r => setTimeout(r, 1500));
-            for (const p of this.context.pages()) {
-                await p.close().catch(() => {});
-            }
+            // Auto-close extension pages (see automaticVisitor for details)
+            const isExtPage = (url) =>
+                url.startsWith('chrome-extension://') ||
+                url.includes('similarweb.com/corp/extension-welcome');
+            this.context.on('page', async (page) => {
+                try {
+                    await page.waitForLoadState('commit').catch(() => {});
+                    if (isExtPage(page.url())) {
+                        await page.close().catch(() => {});
+                    }
+                } catch {}
+            });
         } else {
             this.context = await this.browser.newContext(contextOptions);
         }
@@ -336,6 +343,15 @@ class ManualVisitor {
         await this._setupMergedRouteHandler();
         await this._addStealthScripts();
         this.page = await this.context.newPage();
+
+        for (const p of this.context.pages()) {
+            if (p !== this.page) {
+                const url = p.url();
+                if (url.startsWith('chrome-extension://') || url.includes('similarweb.com/corp/extension-welcome')) {
+                    await p.close().catch(() => {});
+                }
+            }
+        }
     }
 
     /**
