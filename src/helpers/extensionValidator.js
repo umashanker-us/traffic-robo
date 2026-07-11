@@ -69,10 +69,26 @@ function validateExtensionDir(extensionPath) {
         return { valid: false, error: 'manifest.json missing required "version" field' };
     }
 
+    // Resolve __MSG_key__ i18n names (e.g. real SimilarWeb CRX uses these)
+    let name = manifest.name;
+    const msgMatch = name.match(/^__MSG_(\w+)__$/);
+    if (msgMatch) {
+        try {
+            const locale = manifest.default_locale || 'en';
+            const msgsPath = path.join(resolved, '_locales', locale, 'messages.json');
+            const msgs = JSON.parse(fs.readFileSync(msgsPath, 'utf8'));
+            if (msgs[msgMatch[1]] && msgs[msgMatch[1]].message) {
+                name = msgs[msgMatch[1]].message;
+            }
+        } catch {
+            // keep original __MSG__ name if locale file missing
+        }
+    }
+
     return {
         valid: true,
         path: resolved,
-        name: manifest.name,
+        name,
         version: manifest.version,
         manifestVersion: mv,
     };

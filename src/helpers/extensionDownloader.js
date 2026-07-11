@@ -9,6 +9,7 @@ const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const { pipeline } = require('stream/promises');
+const { execSync } = require('child_process');
 
 const SIMILARWEB_EXTENSION_ID = 'hoklmmgfnpapgjgcpechhaamimifchmp';
 
@@ -36,10 +37,9 @@ function httpsGet(url, maxRedirects = 5) {
     });
 }
 
-/**
- * Download CRX and save to a temp file.
- */
 async function downloadCrx(extensionId, destPath) {
+    const dir = path.dirname(destPath);
+    fs.mkdirSync(dir, { recursive: true });
     const url = getCrxDownloadUrl(extensionId);
     const res = await httpsGet(url);
     const file = fs.createWriteStream(destPath);
@@ -48,8 +48,6 @@ async function downloadCrx(extensionId, destPath) {
 
 /**
  * Strip the CRX header and return the offset where the ZIP starts.
- * CRX3: Cr24 + version(4) + header_length(4) + header(N) + ZIP
- * CRX2: Cr24 + version(4) + pubkey_len(4) + sig_len(4) + pubkey + sig + ZIP
  */
 function findZipOffset(buffer) {
     const magic = buffer.toString('ascii', 0, 4);
@@ -69,7 +67,8 @@ function findZipOffset(buffer) {
 
 /**
  * Extract a CRX file to a directory.
- * Strips CRX header → writes temp ZIP → extracts with yauzl/extract-zip.
+ * Strips CRX header → writes temp ZIP → extracts via PowerShell (always
+ * available on Windows, no dependency on extract-zip inside asar).
  */
 async function extractCrx(crxPath, destDir) {
     const crxBuffer = fs.readFileSync(crxPath);
@@ -79,31 +78,38 @@ async function extractCrx(crxPath, destDir) {
     const tmpZip = crxPath + '.zip';
     fs.writeFileSync(tmpZip, zipBuffer);
 
-    // extract-zip is bundled with Electron
-    let extractZip;
-    try {
-        extractZip = require('extract-zip');
-    } catch {
-        // Fallback: use PowerShell Expand-Archive on Windows
-        const { execSync } = require('child_process');
-        fs.mkdirSync(destDir, { recursive: true });
-        execSync(`powershell -NoProfile -Command "Expand-Archive -Path '${tmpZip}' -DestinationPath '${destDir}' -Force"`, { timeout: 30000 });
-        fs.unlinkSync(tmpZip);
-        return;
-    }
-
     fs.mkdirSync(destDir, { recursive: true });
-    await extractZip(tmpZip, { dir: destDir });
-    fs.unlinkSync(tmpZip);
+
+    // PowerShell Expand-Archive — works on all Windows 10/11 without extra deps
+    try {
+        execSync(
+            `powershell -NoProfile -Command "Expand-Archive -LiteralPath '${tmpZip}' -DestinationPath '${destDir}' -Force"`,
+            { timeout: 60000 }
+        );
+    } finally {
+        try { fs.unlinkSync(tmpZip); } catch {}
+    }
+}
+
+/**
+ * Resolve __MSG_key__ placeholders from _locales/en/messages.json.
+ */
+function resolveI18nName(manifest, destDir) {
+    let name = manifest.name || 'Unknown';
+    const match = name.match(/^__MSG_(\w+)__$/);
+    if (!match) return name;
+    try {
+        const locale = manifest.default_locale || 'en';
+        const msgsPath = path.join(destDir, '_locales', locale, 'messages.json');
+        const msgs = JSON.parse(fs.readFileSync(msgsPath, 'utf8'));
+        return (msgs[match[1]] && msgs[match[1]].message) || name;
+    } catch {
+        return name;
+    }
 }
 
 /**
  * Download and extract a Chrome extension from Chrome Web Store.
- *
- * @param {string} extensionId - Chrome Web Store extension ID
- * @param {string} destDir     - Where to extract (e.g. userData/extensions/similarweb)
- * @param {Function} logger    - Optional logger (info, warn)
- * @returns {{ success, name, version, error }}
  */
 async function downloadAndExtractExtension(extensionId, destDir, logger = null) {
     const log = (level, msg) => logger ? logger[level](msg) : console.log(`[${level}] ${msg}`);
@@ -114,26 +120,25 @@ async function downloadAndExtractExtension(extensionId, destDir, logger = null) 
         await downloadCrx(extensionId, crxPath);
         log('info', `CRX downloaded (${(fs.statSync(crxPath).size / 1024).toFixed(0)} KB)`);
 
-        // Clean destination before extracting
         if (fs.existsSync(destDir)) {
             fs.rmSync(destDir, { recursive: true, force: true });
         }
 
         await extractCrx(crxPath, destDir);
-        fs.unlinkSync(crxPath);
+        try { fs.unlinkSync(crxPath); } catch {}
 
-        // Validate extracted extension
         const manifestPath = path.join(destDir, 'manifest.json');
         if (!fs.existsSync(manifestPath)) {
             return { success: false, error: 'Extracted extension has no manifest.json' };
         }
 
         const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-        log('info', `Extension extracted: ${manifest.name} v${manifest.version}`);
+        const name = resolveI18nName(manifest, destDir);
+        log('info', `Extension extracted: ${name} v${manifest.version}`);
 
         return {
             success: true,
-            name: manifest.name || 'Unknown',
+            name,
             version: manifest.version || '0.0.0',
             path: destDir,
         };
@@ -143,9 +148,6 @@ async function downloadAndExtractExtension(extensionId, destDir, logger = null) 
     }
 }
 
-/**
- * Get the persistent extension directory in userData.
- */
 function getExtensionDir(userDataPath) {
     return path.join(userDataPath, 'extensions', 'similarweb');
 }
