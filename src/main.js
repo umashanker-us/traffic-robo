@@ -17,6 +17,7 @@ const { setDebugAllTracking, getDebugAllTracking } = require('./core/automaticVi
 const { parseCampaignCsv, CSV_TEMPLATE } = require('./helpers/campaignCsv');
 const { sanitizeConfigForLog } = require('./helpers/sanitizeConfig');
 const { validateExtensionDir } = require('./helpers/extensionValidator');
+const { downloadAndExtractExtension, getExtensionDir, SIMILARWEB_EXTENSION_ID } = require('./helpers/extensionDownloader');
 
 let mainWindow;
 let visitLogic = null;
@@ -27,7 +28,7 @@ function createWindow() {
         height: 900,
         minWidth: 900,
         minHeight: 700,
-        title: 'GA4 Traffic Robo v2.4',
+        title: 'GA4 Traffic Robo v2.5.0',
         icon: path.join(__dirname, 'ui', 'icon.png'),
         webPreferences: {
             // SECURITY FIX (Medium Priority): contextIsolation + preload
@@ -258,8 +259,38 @@ ipcMain.handle('load-config', async () => {
 });
 
 /**
+ * Resolve the best available SimilarWeb extension path.
+ * Priority: 1) userData (downloaded/updated)  2) bundled in extraResources  3) dev path
+ */
+ipcMain.handle('get-bundled-extension', () => {
+    const candidates = [
+        getExtensionDir(app.getPath('userData')),
+        path.join(process.resourcesPath || '', 'extensions', 'similarweb'),
+        path.join(__dirname, '..', 'extensions', 'similarweb'),
+    ];
+    for (const p of candidates) {
+        if (fs.existsSync(path.join(p, 'manifest.json'))) {
+            const result = validateExtensionDir(p);
+            if (result.valid) {
+                return { found: true, path: result.path, name: result.name, version: result.version };
+            }
+        }
+    }
+    return { found: false };
+});
+
+/**
+ * Download the latest SimilarWeb extension from Chrome Web Store,
+ * extract to userData, and return the path.
+ */
+ipcMain.handle('download-extension', async () => {
+    const destDir = getExtensionDir(app.getPath('userData'));
+    const result = await downloadAndExtractExtension(SIMILARWEB_EXTENSION_ID, destDir, logger);
+    return result;
+});
+
+/**
  * Browse for extension folder
- * NEW: Added for SimilarWeb extension support
  */
 ipcMain.handle('browse-extension', async () => {
     try {

@@ -41,6 +41,11 @@ module.exports = {
             from: "playwright-browsers",
             to: "playwright-browsers",
             filter: ["**/*"]
+        },
+        {
+            from: "extensions",
+            to: "extensions",
+            filter: ["**/*"]
         }
     ],
 

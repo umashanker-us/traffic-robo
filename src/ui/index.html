@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>GA4 Traffic Robo v2.4.1</title>
+    <title>GA4 Traffic Robo v2.5.0</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -545,7 +545,7 @@
             <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
                 <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/>
             </svg>
-            GA4 Traffic Robo v2.4.1
+            GA4 Traffic Robo v2.5.0
             <button id="themeToggle" onclick="toggleTheme()" style="background:none;border:1px solid var(--border);border-radius:6px;cursor:pointer;padding:2px 8px;margin-left:8px;color:var(--text-muted);font-size:14px;" title="Toggle Theme">🌙</button>
         </h1>
         <div class="header-right">
@@ -1069,7 +1069,10 @@ googleads.g.doubleclick.net"
                     <div class="form-group" style="flex: 2;">
                         <label>Extension Path</label>
                         <div style="display: flex; gap: 8px;">
-                            <input type="text" id="extensionPath" placeholder="Path to unpacked extension folder" disabled style="flex: 1;">
+                            <input type="text" id="extensionPath" placeholder="Auto-detected or browse manually" disabled style="flex: 1;">
+                            <button class="btn btn-secondary" id="downloadExtensionBtn" onclick="downloadExtension()" disabled style="flex: none; padding: 6px 12px;">
+                                ⬇️ Download
+                            </button>
                             <button class="btn btn-secondary" id="browseExtensionBtn" onclick="browseExtension()" disabled style="flex: none; padding: 6px 12px;">
                                 📁 Browse
                             </button>
@@ -1082,17 +1085,9 @@ googleads.g.doubleclick.net"
                     <span id="extensionName">No extension loaded</span>
                 </div>
 
-                <details style="margin-top: 10px; font-size: 11px; color: var(--text-muted);">
-                    <summary style="cursor:pointer;"><strong>How to get SimilarWeb extension</strong></summary>
-                    <ol style="margin-left: 20px; margin-top: 5px;">
-                        <li>Install SimilarWeb extension in Chrome</li>
-                        <li>Go to chrome://extensions/</li>
-                        <li>Enable "Developer mode"</li>
-                        <li>Find SimilarWeb and note the ID</li>
-                        <li>Copy extension folder from: <code>%LOCALAPPDATA%\Google\Chrome\User Data\Default\Extensions\[ID]</code></li>
-                        <li>Select the version folder containing manifest.json</li>
-                    </ol>
-                </details>
+                <small style="margin-top: 4px; color: var(--text-muted); display: block;">
+                    Click <strong>Download</strong> to fetch the latest SimilarWeb extension from Chrome Web Store automatically, or <strong>Browse</strong> to select a local folder.
+                </small>
             </div>
         </div>
 
@@ -1233,7 +1228,7 @@ googleads.g.doubleclick.net"
                         </span>
                     </div>
                     <div class="log-output" id="logOutput">
-                        <div class="log-entry log-info">[System] GA4 Traffic Robo v2.4.1 initialized</div>
+                        <div class="log-entry log-info">[System] GA4 Traffic Robo v2.5.0 initialized</div>
                     </div>
                 </div>
 
@@ -1780,26 +1775,70 @@ googleads.g.doubleclick.net"
         // Store previous mode for cancel
         
         // Toggle extension settings visibility - NEW
-        function toggleExtensionSettings() {
+        async function toggleExtensionSettings() {
             const enabled = document.getElementById('extensionEnabled').checked;
             const extensionPath = document.getElementById('extensionPath');
             const browseBtn = document.getElementById('browseExtensionBtn');
+            const downloadBtn = document.getElementById('downloadExtensionBtn');
             const extensionInfo = document.getElementById('extensionInfo');
-            
+
             extensionPath.disabled = !enabled;
             browseBtn.disabled = !enabled;
-            
+            downloadBtn.disabled = !enabled;
+
             if (enabled) {
                 extensionInfo.style.display = 'flex';
-                addLog('info', 'Extension loading enabled');
-                
-                // Check play mode
+
                 const playMode = document.getElementById('playMode').value;
                 if (playMode === 'Fastest' || playMode === 'Fast') {
                     addLog('warn', '⚠️ Extensions require Slow or Slower mode!');
                 }
+
+                // Auto-detect: check userData / bundled extension
+                if (!extensionPath.value) {
+                    try {
+                        const bundled = await api.getBundledExtension();
+                        if (bundled.found) {
+                            extensionPath.value = bundled.path;
+                            document.getElementById('extensionName').textContent = `${bundled.name} v${bundled.version}`;
+                            extensionInfo.classList.remove('not-loaded');
+                            addLog('info', `Extension loaded: ${bundled.name} v${bundled.version}`);
+                        } else {
+                            // No extension found anywhere — auto-download
+                            addLog('info', 'No extension found — downloading from Chrome Web Store...');
+                            await downloadExtension();
+                        }
+                    } catch (e) {
+                        addLog('warn', `Extension auto-detect failed: ${e.message}`);
+                    }
+                }
             } else {
                 extensionInfo.style.display = 'none';
+            }
+        }
+
+        async function downloadExtension() {
+            const downloadBtn = document.getElementById('downloadExtensionBtn');
+            const extensionInfo = document.getElementById('extensionInfo');
+            downloadBtn.disabled = true;
+            downloadBtn.textContent = '⏳ Downloading...';
+            addLog('info', 'Downloading SimilarWeb extension from Chrome Web Store...');
+
+            try {
+                const result = await api.downloadExtension();
+                if (result.success) {
+                    document.getElementById('extensionPath').value = result.path;
+                    document.getElementById('extensionName').textContent = `${result.name} v${result.version}`;
+                    extensionInfo.classList.remove('not-loaded');
+                    addLog('info', `Extension downloaded: ${result.name} v${result.version}`);
+                } else {
+                    addLog('error', `Download failed: ${result.error}`);
+                }
+            } catch (e) {
+                addLog('error', `Download failed: ${e.message}`);
+            } finally {
+                downloadBtn.disabled = !document.getElementById('extensionEnabled').checked;
+                downloadBtn.textContent = '⬇️ Download';
             }
         }
         

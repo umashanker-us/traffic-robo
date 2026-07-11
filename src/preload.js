@@ -25,6 +25,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     loadConfig: () => ipcRenderer.invoke('load-config'),
 
     // ===== Extension =====
+    getBundledExtension: () => ipcRenderer.invoke('get-bundled-extension'),
+    downloadExtension: () => ipcRenderer.invoke('download-extension'),
     browseExtension: () => ipcRenderer.invoke('browse-extension'),
 
     // ===== Session Replay =====

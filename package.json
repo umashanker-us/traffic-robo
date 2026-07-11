@@ -1,6 +1,6 @@
 {
   "name": "ga4-traffic-robo",
-  "version": "2.4.1",
+  "version": "2.5.0",
   "description": "GA4 Compatible Traffic Automation Tool with Realistic User Behavior Simulation",
   "main": "src/main.js",
   "scripts": {
