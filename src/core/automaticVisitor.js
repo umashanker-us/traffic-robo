@@ -20,6 +20,7 @@
  */
 
 const { chromium } = require('playwright');
+const os = require('os');
 const path = require('path');
 const fs = require('fs');
 const { getLogger, getCampaignLogDir } = require('../helpers/logger');
@@ -1076,39 +1077,34 @@ class AutomaticVisitor {
      * FIXED: Added extension support for SimilarWeb
      * Uses bundled Chromium in packaged mode
      */
+    _buildLaunchArgs() {
+        return [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-blink-features=AutomationControlled',
+            '--disable-infobars',
+            '--disable-client-side-phishing-detection',
+            '--disable-features=SafeBrowsing',
+            '--no-first-run',
+            `--window-size=${this.screenSize.width},${this.screenSize.height}`
+        ];
+    }
+
     async _launchBrowser() {
         const isHeadless = this.playMode === Constants.PLAY_MODES.FASTEST ||
                           this.playMode === Constants.PLAY_MODES.FAST;
 
-        const launchOptions = {
-            headless: isHeadless,
-            args: [
-                '--no-sandbox',
-                '--disable-setuid-sandbox',
-                '--disable-dev-shm-usage',
-                '--disable-blink-features=AutomationControlled',
-                '--disable-infobars',
-                '--disable-client-side-phishing-detection',
-                '--disable-features=SafeBrowsing',
-                '--no-first-run',
-                `--window-size=${this.screenSize.width},${this.screenSize.height}`
-            ]
-        };
-
-        // Use bundled Chromium in packaged mode
-        const chromiumPath = this._getChromiumPath();
-        if (chromiumPath) {
-            launchOptions.executablePath = chromiumPath;
-        }
-
-        // FIXED: Add extension if enabled and path exists
-        // Note: Extensions only work in headed mode (non-headless)
+        // Extension + headed → defer to _createContext which uses
+        // launchPersistentContext (extensions only work there, not in
+        // a separate browser.newContext).
+        this._usePersistentContext = false;
         if (this.extensionEnabled && this.extensionPath && !isHeadless) {
             if (fs.existsSync(this.extensionPath)) {
-                launchOptions.args.push(`--disable-extensions-except=${this.extensionPath}`);
-                launchOptions.args.push(`--load-extension=${this.extensionPath}`);
-                this.logger.info(`Loading extension from: ${this.extensionPath}`);
+                this._usePersistentContext = true;
                 this.extensionLoaded = true;
+                this.logger.info(`Extension enabled — will use persistent context: ${this.extensionPath}`);
+                return;
             } else {
                 this.logger.warn(`Extension path not found: ${this.extensionPath}`);
                 this.extensionLoaded = false;
@@ -1116,6 +1112,16 @@ class AutomaticVisitor {
         } else if (this.extensionEnabled && isHeadless) {
             this.logger.warn(`Extensions require headed mode (Slow or Slower). Current mode: ${this.playMode}`);
             this.extensionLoaded = false;
+        }
+
+        const launchOptions = {
+            headless: isHeadless,
+            args: this._buildLaunchArgs()
+        };
+
+        const chromiumPath = this._getChromiumPath();
+        if (chromiumPath) {
+            launchOptions.executablePath = chromiumPath;
         }
 
         this.browser = await chromium.launch(launchOptions);
@@ -1129,13 +1135,12 @@ class AutomaticVisitor {
      * 2. Merged route handler for proxy + ad blocking
      * 3. Proper proxy implementation using Playwright's built-in proxy
      */
-    async _createContext() {
+    _buildContextOptions() {
         const isHeadless = this.playMode === Constants.PLAY_MODES.FASTEST ||
                           this.playMode === Constants.PLAY_MODES.FAST;
         const isMobileUA = this.userAgent.includes('Mobile');
         const contextOptions = {
             userAgent: this.userAgent,
-            // FIXED: Use location from config
             locale: this.locationData.locale,
             timezoneId: this.locationData.timezone,
             geolocation: {
@@ -1145,10 +1150,6 @@ class AutomaticVisitor {
             permissions: ['geolocation'],
             javaScriptEnabled: true,
         };
-        // Headed: viewport=null lets the real window dimensions drive layout,
-        // so the site renders to actual content area (not clipped by chrome UI).
-        // Playwright forbids deviceScaleFactor/isMobile/hasTouch with null viewport,
-        // so those are only set in headless mode where we control the viewport.
         if (isHeadless) {
             contextOptions.viewport = {
                 width: this.screenSize.width,
@@ -1161,42 +1162,57 @@ class AutomaticVisitor {
             contextOptions.viewport = null;
         }
 
-        this.logger.info(`Viewport: ${this.screenSize.width}x${this.screenSize.height} | UA: ${this.userAgent.substring(0, 50)}... | Mobile: ${this.userAgent.includes('Mobile')}`);
-
         if (this.isReferer && this.referer) {
             contextOptions.extraHTTPHeaders = {
                 'Referer': this.referer
             };
         }
-        
-        // IP Rotation - Generate Indian IP and add X-Forwarded-For header
-        // ⚠️ WARNING: Does NOT work with Cloudflare - they use real connecting IP
+
         if (this.ipRotation) {
             const ipResult = generateIndianIP(this.location);
             if (ipResult) {
                 this.currentIP = ipResult.ip;
                 this.logger.info(`🌐 IP Rotation: ${this.currentIP} (${ipResult.isp})`);
                 this.logger.warn(`⚠️ IP spoofing only works on non-Cloudflare sites`);
-                
-                // Only X-Forwarded-For - some servers trust this header
                 contextOptions.extraHTTPHeaders = {
                     ...(contextOptions.extraHTTPHeaders || {}),
                     'X-Forwarded-For': this.currentIP,
                 };
             }
         }
-        
-        // Proxy: NO context-level proxy — /collect requests handled in route handler
-        // This means page loads DIRECT, only tiny /collect beacons go through proxy.
-        // For Custom Proxy URLs (click trackers): redirect chain is pre-resolved
-        // through proxy in Node before page.goto, so trackers see proxy IP but
-        // browser loads only the final landing page DIRECT. See _resolveTrackerChain.
+        return contextOptions;
+    }
 
-        this.context = await this.browser.newContext(contextOptions);
+    async _createContext() {
+        const contextOptions = this._buildContextOptions();
+        this.logger.info(`Viewport: ${this.screenSize.width}x${this.screenSize.height} | UA: ${this.userAgent.substring(0, 50)}... | Mobile: ${this.userAgent.includes('Mobile')}`);
 
-        // Setup route handler for ad blocking, fast mode, and smart proxy
+        if (this._usePersistentContext) {
+            // Extensions only work inside launchPersistentContext — Playwright
+            // loads them into the default profile, not into browser.newContext().
+            this._tempUserDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'trafficrobo-'));
+            const args = this._buildLaunchArgs();
+            args.push(`--disable-extensions-except=${this.extensionPath}`);
+            args.push(`--load-extension=${this.extensionPath}`);
+
+            const persistentOptions = {
+                ...contextOptions,
+                headless: false,
+                args,
+            };
+            const chromiumPath = this._getChromiumPath();
+            if (chromiumPath) {
+                persistentOptions.executablePath = chromiumPath;
+            }
+
+            this.context = await chromium.launchPersistentContext(this._tempUserDataDir, persistentOptions);
+            this.browser = this.context.browser();
+            this.logger.info(`Persistent context launched with extension (userDataDir: ${this._tempUserDataDir})`);
+        } else {
+            this.context = await this.browser.newContext(contextOptions);
+        }
+
         await this._setupMergedRouteHandler();
-
         await this._addStealthScripts();
         this.page = await this.context.newPage();
         this.logger.debug('Context and page created');
@@ -1551,12 +1567,18 @@ class AutomaticVisitor {
     async _cleanup() {
         try {
             if (this.page) await this.page.close().catch(() => {});
-            if (this.context) await this.context.close().catch(() => {});
-            if (this.browser) await this.browser.close().catch(() => {});
+            if (this._usePersistentContext) {
+                // context.close() shuts down the browser too
+                if (this.context) await this.context.close().catch(() => {});
+            } else {
+                if (this.context) await this.context.close().catch(() => {});
+                if (this.browser) await this.browser.close().catch(() => {});
+            }
             this.logger.debug('Cleanup completed');
         } catch (error) {
             this.logger.debug(`Cleanup error: ${error.message}`);
         }
+        this._cleanupTempDir();
     }
 
     /**
@@ -1565,19 +1587,33 @@ class AutomaticVisitor {
     async forceClose() {
         this.logger.info(`🛑 Force closing browser...`);
         try {
-            // Kill browser process immediately
-            if (this.browser) {
+            if (this._usePersistentContext) {
+                if (this.context) {
+                    await this.context.close().catch(() => {});
+                    this.context = null;
+                    this.browser = null;
+                }
+            } else if (this.browser) {
                 await this.browser.close().catch(() => {});
                 this.browser = null;
             }
-            if (this.context) {
-                this.context = null;
-            }
-            if (this.page) {
-                this.page = null;
-            }
+            if (this.context) this.context = null;
+            if (this.page) this.page = null;
         } catch (error) {
             // Ignore errors during force close
+        }
+        this._cleanupTempDir();
+    }
+
+    _cleanupTempDir() {
+        if (this._tempUserDataDir) {
+            try {
+                fs.rmSync(this._tempUserDataDir, { recursive: true, force: true });
+                this.logger.debug(`Cleaned up temp dir: ${this._tempUserDataDir}`);
+            } catch (e) {
+                this.logger.debug(`Temp dir cleanup failed: ${e.message}`);
+            }
+            this._tempUserDataDir = null;
         }
     }
 }
