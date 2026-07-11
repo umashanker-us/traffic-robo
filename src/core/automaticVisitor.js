@@ -1199,6 +1199,15 @@ class AutomaticVisitor {
             this.context = await chromium.launchPersistentContext(this._tempUserDataDir, persistentOptions);
             this.browser = this.context.browser();
             this.logger.info(`Persistent context launched with extension (userDataDir: ${this._tempUserDataDir})`);
+
+            // Extensions open welcome/onboarding tabs on first install via
+            // chrome.runtime.onInstalled. Since each visit gets a fresh temp
+            // dir, the extension always thinks it's a fresh install. Close
+            // all pages it opened before creating our own.
+            await this._sleep(1500);
+            for (const p of this.context.pages()) {
+                await p.close().catch(() => {});
+            }
         } else {
             this.context = await this.browser.newContext(contextOptions);
         }
