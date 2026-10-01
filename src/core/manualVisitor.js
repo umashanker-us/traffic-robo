@@ -9,86 +9,19 @@
  *   - avgSessionDuration fallback wait
  */
 
-const { chromium } = require('playwright');
-const os = require('os');
-const path = require('path');
-const fs = require('fs');
-const { getLogger, getCampaignLogDir } = require('../helpers/logger');
 const Constants = require('../helpers/constants');
-const { ProxyRouter, isGACollectRequest, isGAScript, parseProxyString, parseCustomProxyPatterns, matchesCustomProxyPattern, resolveTrackerChain } = require('../helpers/proxyRouter');
-const { generateIndianIP } = require('../helpers/indianIP');
+const { matchesCustomProxyPattern, resolveTrackerChain } = require('../helpers/proxyRouter');
 const { SessionReplay } = require('../helpers/sessionReplay');
-const { buildUserAgentMetadata, buildClientHintHeaders, applyUserAgentOverride, isChromiumUA } = require('../helpers/clientHints');
-const { patchCollectUrlForReturning } = require('../helpers/collectPatch');
+const BrowserSession = require('./browserSession');
 
-class ManualVisitor {
+class ManualVisitor extends BrowserSession {
     constructor(config) {
-        this.url = config.url;
-        this.referer = config.referer;
-        this.isReferer = config.isReferer;
-        // visitReferer: navigate to referer page first, then redirect to campaign URL.
-        // Defaults to isReferer for backward compat when caller didn't set it.
-        this.visitReferer = config.visitReferer !== undefined ? config.visitReferer : config.isReferer;
-        this.userAgent = config.userAgent;
-        this.threadId = config.threadId;
-        this.screenSize = config.screenSize;
-        this.playMode = config.playMode;
-        this.adsBlock = config.adsBlock;
+        super(config);
+
+        // Manual mode drives the page from user commands instead of a Visit.
+        this.url = this.targetUrl;
         this.commands = config.commands;
-
-        // Location setting - FIXED: Now functional
-        this.location = config.location || 'India';
-        this.locationData = Constants.getLocationCoords(this.location);
-
-        // Extension settings
-        this.extensionEnabled = config.extensionEnabled || false;
-        this.extensionPath = config.extensionPath || '';
-
-        // Returning-user features
-        this.isOldUser = !!config.isOldUser;
-        this.savedCookies = config.savedCookies || null;
-        this.previousURL = config.previousURL || '';
-        this.useBaseUrlForOldUser = !!config.useBaseUrlForOldUser;
-
-        // Proxy settings — only /collect endpoints proxied (matches AutomaticVisitor)
-        this.proxyEnabled = !!config.proxyEnabled;
-        // Proxying /collect is what spoofs GA4's reported location, but it is
-        // also the bulk of proxy bandwidth. Off → beacons go direct (real IP
-        // decides GA4 location) and only custom patterns use the proxy.
-        this.proxyCollectEnabled = config.proxyCollectEnabled !== false;
-        this.proxyUrl = config.proxyUrl || '';
-        this.proxyConfig = this.proxyEnabled ? parseProxyString(this.proxyUrl) : null;
-        this.proxyRouter = null;
-
-        // Custom proxy URL patterns (CM360 / ad trackers) — parity with AutomaticVisitor
-        this.customProxyEnabled = !!config.customProxyEnabled;
-        this.customProxyPatterns = this.customProxyEnabled
-            ? parseCustomProxyPatterns(config.customProxyPatterns || '')
-            : [];
-
-        // IP rotation
-        this.ipRotation = !!config.ipRotation;
-        this.currentIP = null;
-
-        // Fast Mode resource blocking
-        this.fastMode = !!config.fastMode;
-        this.blockImages = !!config.blockImages;
-        this.blockMedia = !!config.blockMedia;
-        this.blockFonts = !!config.blockFonts;
-        this.blockStyles = !!config.blockStyles;
-        this.blockScripts = !!config.blockScripts;
-
-        // Misc
-        this.restrictToPrimaryDomain = !!config.restrictToPrimaryDomain;
         this.avgSessionDuration = config.avgSessionDuration || 0;
-        this.primaryDomain = this._extractDomain(this.url);
-
-        this.logger = getLogger(this.threadId);
-        this.browser = null;
-        this.context = null;
-        this.page = null;
-        this.replay = null;
-        this._extractedCookies = null;
     }
 
     /**
@@ -99,17 +32,7 @@ class ManualVisitor {
 
         // Initialize session replay (parity with AutomaticVisitor)
         this.replay = new SessionReplay(this.threadId, { maxEvents: 200 });
-        this.replay.setSessionInfo({
-            userAgent: this.userAgent,
-            screenSize: this.screenSize,
-            location: this.location,
-            playMode: this.playMode,
-            mode: 'manual',
-            proxyMode: this.proxyEnabled ? 'collect-only' : 'none',
-            ipRotation: this.ipRotation,
-            spoofedIP: this.currentIP,
-            isOldUser: this.isOldUser,
-        });
+        this.replay.setSessionInfo(this._buildSessionInfo({ mode: 'manual' }));
         this.replay._addEvent('visit_start', {
             url: this.url,
             mode: 'manual',
@@ -140,6 +63,14 @@ class ManualVisitor {
             await this._launchBrowser();
             await this._createContext();
 
+            // See AutomaticVisitor: these are only known after the context is
+            // built, which is after setSessionInfo ran.
+            this.replay.updateSessionInfo({
+                spoofedIP: this.currentIP,
+                extensionLoaded: this.extensionLoaded,
+                extensionProfileId: this.extensionProfileId,
+            });
+
             // Inject saved GA cookies for returning users BEFORE any navigation
             if (this.savedCookies && this.savedCookies.length > 0 && this.context) {
                 await this.context.addCookies(this.savedCookies);
@@ -157,6 +88,7 @@ class ManualVisitor {
                 // No page to drive and no gtag to fire — commands and the
                 // session hold would buy nothing.
                 this.logger.warn(`⬇ Visit ended at a download (${this._downloadLanding.filename || this._downloadLanding.url}) — commands skipped, no GA4 hit is possible for a file URL`);
+                this.replay.stats.downloadLanding = true;
                 this.logger.warn(`   Use an HTML landing page as the campaign URL if you need GA4 sessions.`);
             } else {
                 await this._executeCommands();
@@ -191,382 +123,6 @@ class ManualVisitor {
             this._saveReplay();
             await this._cleanup();
         }
-    }
-
-    /**
-     * Visit previous URL for returning users — creates a GA4 session cookie
-     * before the campaign URL so the campaign visit counts as "returning".
-     * Ported from AutomaticVisitor._visitPreviousUrl with manual-mode tweaks.
-     */
-    async _visitPreviousUrl() {
-        let prevUrl = this.previousURL;
-        let urlSource = 'manual';
-
-        if (!prevUrl && this.useBaseUrlForOldUser) {
-            try {
-                const u = new URL(this.url);
-                prevUrl = `${u.protocol}//${u.host}${u.pathname}`;
-                urlSource = 'auto-extracted';
-            } catch {
-                this.logger.warn(`Cannot extract base URL from: ${this.url}`);
-                return;
-            }
-        }
-
-        if (!prevUrl) return;
-
-        this.logger.info(`👤 RETURNING USER - Visiting previous URL first (${urlSource}): ${prevUrl}`);
-        this.replay.logPreviousURLVisit?.(prevUrl, urlSource);
-
-        try {
-            await this.page.goto(prevUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-            // Brief pause so GA4 has time to set cookies
-            await this._randomDelay(2000, 3500);
-            this.logger.info(`✅ Previous URL visited`);
-        } catch (error) {
-            this.replay.logError?.('previous_url', error.message);
-            this.logger.warn(`Failed to visit previous URL: ${error.message}`);
-        }
-    }
-
-    /**
-     * Launch browser
-     * FIXED: Added extension support
-     */
-    _buildLaunchArgs() {
-        return [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-blink-features=AutomationControlled',
-            '--disable-client-side-phishing-detection',
-            '--disable-features=SafeBrowsing',
-            '--no-first-run'
-        ];
-    }
-
-    async _launchBrowser() {
-        const isHeadless = this.playMode === Constants.PLAY_MODES.FASTEST ||
-                          this.playMode === Constants.PLAY_MODES.FAST;
-
-        this._usePersistentContext = false;
-        if (this.extensionEnabled && this.extensionPath && !isHeadless) {
-            if (fs.existsSync(this.extensionPath)) {
-                this._usePersistentContext = true;
-                this.logger.info(`Extension enabled — will use persistent context: ${this.extensionPath}`);
-                return;
-            } else {
-                this.logger.warn(`Extension path not found: ${this.extensionPath}`);
-            }
-        } else if (this.extensionEnabled && isHeadless) {
-            this.logger.warn(`Extensions require headed mode (Slow or Slower). Current mode: ${this.playMode}`);
-        }
-
-        const launchOptions = {
-            headless: isHeadless,
-            args: this._buildLaunchArgs()
-        };
-
-        this.browser = await chromium.launch(launchOptions);
-    }
-
-    /**
-     * Create browser context
-     */
-    _buildContextOptions() {
-        const isHeadless = this.playMode === Constants.PLAY_MODES.FASTEST ||
-                          this.playMode === Constants.PLAY_MODES.FAST;
-        const isMobileUA = this.userAgent.includes('Mobile');
-        const { metadata: uaMetadata } = buildUserAgentMetadata(this.userAgent);
-        this._uaMetadata = uaMetadata;
-        const contextOptions = {
-            userAgent: this.userAgent,
-            // A landing URL that resolves to a file (PDF click-trackers do this)
-            // would otherwise be downloaded in full — megabytes per visit, for a
-            // page that can never fire a GA4 hit. Refusing the download makes
-            // Chromium discard the body instead.
-            acceptDownloads: false,
-            locale: this.locationData.locale,
-            timezoneId: this.locationData.timezone,
-            geolocation: {
-                latitude: this.locationData.latitude,
-                longitude: this.locationData.longitude
-            },
-            permissions: ['geolocation']
-        };
-        // Mobile emulation must be on in headed mode too: `isMobile` is what
-        // flips sec-ch-ua-mobile to ?1, and GA4 reads that hint (uamb) rather
-        // than the "Mobile" token in the UA string to pick a device category.
-        // Without it every headed mobile session landed in GA4 as Desktop.
-        if (isHeadless || isMobileUA) {
-            contextOptions.viewport = {
-                width: this.screenSize.width,
-                height: this.screenSize.height
-            };
-            contextOptions.hasTouch = isMobileUA;
-            contextOptions.isMobile = isMobileUA;
-            contextOptions.deviceScaleFactor = isMobileUA ? 2 : 1;
-        } else {
-            contextOptions.viewport = null;
-        }
-
-        // Client hints must ride along as real headers: route.continue() in the
-        // merged route handler rebuilds request headers from Playwright's
-        // network layer, which would otherwise re-expose Chromium's own brands.
-        contextOptions.extraHTTPHeaders = buildClientHintHeaders(uaMetadata);
-
-        if (this.isReferer && this.referer) {
-            contextOptions.extraHTTPHeaders['Referer'] = this.referer;
-        }
-
-        if (this.ipRotation) {
-            const ipResult = generateIndianIP(this.location);
-            if (ipResult) {
-                this.currentIP = ipResult.ip;
-                this.logger.info(`🌐 IP Rotation: ${this.currentIP} (${ipResult.isp})`);
-                contextOptions.extraHTTPHeaders = {
-                    ...(contextOptions.extraHTTPHeaders || {}),
-                    'X-Forwarded-For': this.currentIP,
-                };
-            }
-        }
-        return contextOptions;
-    }
-
-    async _createContext() {
-        const contextOptions = this._buildContextOptions();
-
-        if (this._usePersistentContext) {
-            this._tempUserDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'trafficrobo-'));
-            const args = this._buildLaunchArgs();
-            args.push(`--disable-extensions-except=${this.extensionPath}`);
-            args.push(`--load-extension=${this.extensionPath}`);
-
-            const persistentOptions = {
-                ...contextOptions,
-                headless: false,
-                args,
-            };
-
-            this.context = await chromium.launchPersistentContext(this._tempUserDataDir, persistentOptions);
-            this.browser = this.context.browser();
-            this.logger.info(`Persistent context launched with extension (userDataDir: ${this._tempUserDataDir})`);
-
-            // Auto-close extension pages (see automaticVisitor for details)
-            const isExtPage = (url) =>
-                url.startsWith('chrome-extension://') ||
-                url.includes('similarweb.com/corp/extension-welcome');
-            this.context.on('page', async (page) => {
-                try {
-                    await page.waitForLoadState('commit').catch(() => {});
-                    if (isExtPage(page.url())) {
-                        await page.close().catch(() => {});
-                    }
-                } catch {}
-            });
-        } else {
-            this.context = await this.browser.newContext(contextOptions);
-        }
-
-        await this._setupMergedRouteHandler();
-        await this._addStealthScripts();
-        await this._applyClientHints();
-        this.page = await this.context.newPage();
-        // The context 'page' listener also fires for this page, but the CDP
-        // override has to land before the first navigation — so await it here.
-        await this._applyHintsToPage(this.page);
-        this._watchForDownloadLanding(this.page);
-
-        for (const p of this.context.pages()) {
-            if (p !== this.page) {
-                const url = p.url();
-                if (url.startsWith('chrome-extension://') || url.includes('similarweb.com/corp/extension-welcome')) {
-                    await p.close().catch(() => {});
-                }
-            }
-        }
-    }
-
-    /**
-     * Merged route handler — ports the automatic-mode logic so manual mode
-     * has parity for ad blocking, fast-mode resource blocking, /collect-only
-     * proxy routing, and returning-user /collect parameter patching.
-     */
-    /**
-     * Let a /collect beacon go direct, still applying the returning-user patch
-     * and logging it to the replay. Used both when no proxy is configured and
-     * when collect proxying is switched off.
-     */
-    async _handleDirectCollect(route, url) {
-        if (this.isOldUser) {
-            const patched = patchCollectUrlForReturning(url);
-            if (patched) {
-                if (this.replay) this.replay.logRequest(patched, true, false);
-                await route.continue({ url: patched });
-                return;
-            }
-        }
-        if (this.replay) this.replay.logRequest(url, true, false);
-        await route.continue();
-    }
-
-    async _setupMergedRouteHandler() {
-        if (this.proxyEnabled && this.proxyConfig) {
-            this.proxyRouter = new ProxyRouter({
-                proxyUrl: this.proxyUrl,
-                enabled: true,
-                collectEnabled: this.proxyCollectEnabled,
-                threadId: this.threadId
-            });
-        }
-
-        const self = this;
-        const blockedAdPatterns = [
-            'googlesyndication.com', 'adservice.google', 'adsense',
-            'facebook.com/tr', 'connect.facebook', 'amazon-adsystem',
-            'adnxs.com', 'criteo.com', 'outbrain.com', 'taboola.com',
-            'doubleclick.net',
-        ];
-
-        await this.context.route('**/*', async (route, request) => {
-          try {
-            const url = request.url();
-            const urlLower = url.toLowerCase();
-            const resourceType = request.resourceType();
-
-            // 1. Ad blocking
-            if (self.adsBlock && blockedAdPatterns.some(p => urlLower.includes(p))) {
-                await route.abort();
-                return;
-            }
-
-            // 2. Fast Mode resource blocking (never block GA collect/scripts)
-            if (self.fastMode) {
-                const isCollect = isGACollectRequest(url);
-                const isScript = isGAScript(url);
-                if (!isCollect && !isScript) {
-                    if (self.blockImages && resourceType === 'image') { await route.abort(); return; }
-                    if (self.blockMedia && resourceType === 'media') { await route.abort(); return; }
-                    if (self.blockFonts && resourceType === 'font') { await route.abort(); return; }
-                    if (self.blockStyles && resourceType === 'stylesheet') { await route.abort(); return; }
-                    if (self.blockScripts && resourceType === 'script') { await route.abort(); return; }
-                }
-            }
-
-            // 3. Proxy: only /collect beacons through proxy, everything else direct
-            if (self.proxyEnabled && self.proxyRouter) {
-                if (isGACollectRequest(url) && !self.proxyCollectEnabled) {
-                    // Collect proxying off — beacon goes direct, but still gets
-                    // the returning-user patch and shows up in the replay log.
-                    self.proxyRouter.stats.totalRequests++;
-                    self.proxyRouter.stats.directRequests++;
-                    await self._handleDirectCollect(route, url);
-                    return;
-                }
-                if (isGACollectRequest(url)) {
-                    let collectUrl = url;
-                    if (self.isOldUser) {
-                        const patched = patchCollectUrlForReturning(url);
-                        if (patched) collectUrl = patched;
-                    }
-                    self.proxyRouter.stats.totalRequests++;
-                    self.proxyRouter.stats.proxiedRequests++;
-                    try {
-                        const response = await self.proxyRouter.makeProxiedRequest(request, collectUrl);
-                        await route.fulfill({
-                            status: response.status,
-                            headers: response.headers,
-                            body: response.body,
-                        });
-                        if (self.replay) self.replay.logRequest(collectUrl, true, true);
-                    } catch (e) {
-                        if (self.replay) self.replay.logError('proxy_collect', e.message);
-                        await route.continue();
-                    }
-                    return;
-                }
-                // Custom proxy URL patterns for SUBRESOURCE pixels fired during
-                // page load. The initial click-tracker NAVIGATION is pre-resolved
-                // in Node before page.goto (see _visitPage), so this branch only
-                // handles in-page tracker hits — never top-frame navigation.
-                if (self.customProxyEnabled && self.customProxyPatterns.length > 0 &&
-                    matchesCustomProxyPattern(url, self.customProxyPatterns)) {
-                    self.proxyRouter.stats.totalRequests++;
-                    self.proxyRouter.stats.proxiedRequests++;
-                    try {
-                        const response = await self.proxyRouter.makeProxiedRequest(request);
-                        await route.fulfill({
-                            status: response.status,
-                            headers: response.headers,
-                            body: response.body,
-                        });
-                    } catch (e) {
-                        try { await route.continue(); } catch {}
-                    }
-                    return;
-                }
-                self.proxyRouter.stats.totalRequests++;
-                self.proxyRouter.stats.directRequests++;
-                if (isGAScript(url)) {
-                    self.proxyRouter.stats.scriptsLoadedDirect++;
-                    if (self.replay) self.replay.logRequest(url, true, false);
-                }
-                await route.continue();
-                return;
-            }
-
-            // 4. No proxy — still track /collect for replay + apply returning-user patch
-            if (isGACollectRequest(url)) {
-                await self._handleDirectCollect(route, url);
-                return;
-            }
-
-            await route.continue();
-          } catch (err) {
-            // Page closed mid-request or route already handled — common, swallow.
-            try { await route.continue(); } catch {}
-            self.logger.debug(`Route handler error (ignored): ${err.message}`);
-          }
-        });
-    }
-
-    /**
-     * Visit the initial page.
-     * If visitReferer is true (e.g. Referral mode), navigate to the referer
-     * page first, then redirect to the campaign URL so document.referrer is set.
-     */
-    /**
-     * A navigation that Chromium answers with a download never becomes a page:
-     * goto rejects, nothing renders, and no gtag can fire. Record it so the
-     * visit can end cleanly instead of being reported as a failure.
-     */
-    _watchForDownloadLanding(page) {
-        page.on('download', (download) => {
-            this._downloadLanding = {
-                url: download.url(),
-                filename: download.suggestedFilename(),
-            };
-            // acceptDownloads:false already discards the body; cancelling makes
-            // it explicit and releases the download slot immediately.
-            Promise.resolve(download.cancel()).catch(() => {});
-        });
-    }
-
-    /**
-     * Chromium decides "this is a download" slightly after the navigation
-     * fails, so a failed goto gets a short grace period for the event.
-     */
-    async _awaitDownloadSignal(timeout = 750) {
-        if (this._downloadLanding) return this._downloadLanding;
-        try {
-            const download = await this.page.waitForEvent('download', { timeout });
-            this._downloadLanding = this._downloadLanding || {
-                url: download.url(),
-                filename: download.suggestedFilename(),
-            };
-        } catch {
-            // no download — a real navigation failure
-        }
-        return this._downloadLanding;
     }
 
     async _visitPage() {
@@ -629,6 +185,13 @@ class ManualVisitor {
         // CM360 / ad-tracker click URL, page.url() now points at the real
         // destination after the 302 chain.
         this._resolveLandedDomain();
+
+        // Manual mode never checked the extension at all — enabling it here was
+        // silently unverifiable.
+        if (this.extensionEnabled && this.extensionLoaded) {
+            await this._verifyExtension();
+        }
+
         await this._randomDelay(1000, 2000);
     }
 
@@ -874,196 +437,6 @@ class ManualVisitor {
         }
     }
 
-    /**
-     * Add stealth scripts (parity with AutomaticVisitor — adds language injection)
-     */
-    async _addStealthScripts() {
-        const languages = Constants.getLanguagesForLocation(this.location);
-        // Firefox and Safari expose no navigator.userAgentData at all, so for a
-        // non-Chromium UA the object itself has to go — otherwise the UA string
-        // and the hints contradict each other.
-        const hideUserAgentData = !isChromiumUA(this.userAgent);
-
-        await this.context.addInitScript(({ langs, hideUAData }) => {
-            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-            Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
-            Object.defineProperty(navigator, 'languages', { get: () => langs });
-            window.chrome = { runtime: {} };
-            if (hideUAData) {
-                try { delete Object.getPrototypeOf(navigator).userAgentData; } catch {}
-                try { Object.defineProperty(navigator, 'userAgentData', { get: () => undefined }); } catch {}
-            }
-        }, { langs: languages, hideUAData: hideUserAgentData });
-    }
-
-    /**
-     * Push UA client hints that match this.userAgent.
-     *
-     * Playwright's `userAgent` option only rewrites the UA header — `sec-ch-ua*`
-     * and `navigator.userAgentData` keep Chromium's own values, and those are
-     * what GA4 actually reads (uamb / uap / uafvl). Left alone, every session
-     * reported as Device: Desktop, Browser: Mozilla. Has to be applied per page
-     * over CDP, so new pages are hooked as they open.
-     */
-    async _applyClientHints() {
-        const metadata = this._uaMetadata || buildUserAgentMetadata(this.userAgent).metadata;
-        this._hintedPages = new WeakSet();
-
-        const apply = async (page) => {
-            if (!page || this._hintedPages.has(page)) return;
-            this._hintedPages.add(page);
-            try {
-                await applyUserAgentOverride(this.context, page, {
-                    userAgent: this.userAgent,
-                    metadata,
-                });
-            } catch (err) {
-                // Page may already be closing
-                this.logger.debug(`Client hints override failed: ${err.message}`);
-            }
-        };
-        this._applyHintsToPage = apply;
-
-        this.context.on('page', (page) => { apply(page).catch(() => {}); });
-        await Promise.all(this.context.pages().map(apply));
-
-        const brands = metadata.brands.map(b => `${b.brand}/${b.version}`).join(', ');
-        this.logger.info(`Client hints: mobile=${metadata.mobile} | platform=${metadata.platform || 'suppressed'} | brands=[${brands || 'suppressed'}]`);
-    }
-
-    /**
-     * Extract GA cookies BEFORE context close — context.cookies() returns
-     * empty after close, so this must run inside the execute() finally before _cleanup().
-     */
-    async _extractCookiesBeforeClose() {
-        if (!this.context) {
-            this._extractedCookies = [];
-            return;
-        }
-        try {
-            const all = await this.context.cookies();
-            // Same filter as automatic: only _ga (client ID). Skip _ga_<MEAS_ID>
-            // session cookie or _gid — re-injecting them would continue the old
-            // session instead of starting a fresh returning-user session.
-            this._extractedCookies = all.filter(c => c.name === '_ga');
-        } catch (e) {
-            this.logger.debug(`Cookie extract failed: ${e.message}`);
-            this._extractedCookies = [];
-        }
-    }
-
-    /**
-     * Get GA cookies extracted from the visit (called by visitLogic to seed pool).
-     */
-    getCookies() {
-        return this._extractedCookies || [];
-    }
-
-    /**
-     * Save session replay JSON to campaign log dir replays/
-     */
-    _saveReplay() {
-        try {
-            if (!this.replay) return;
-            const campaignDir = getCampaignLogDir();
-            if (!campaignDir) return;
-            const replaysDir = path.join(campaignDir, 'replays');
-            fs.mkdirSync(replaysDir, { recursive: true });
-            const filepath = path.join(replaysDir, `replay_${this.threadId}_${Date.now()}.json`);
-            fs.writeFileSync(filepath, JSON.stringify(this.replay.getSummary(), null, 2));
-        } catch (e) {
-            this.logger.debug(`Failed to save replay: ${e.message}`);
-        }
-    }
-
-    /**
-     * Extract domain from URL (used for restrictToPrimaryDomain checks)
-     */
-    _extractDomain(url) {
-        try {
-            return new URL(url).hostname.replace(/^www\./, '');
-        } catch {
-            return '';
-        }
-    }
-
-    /**
-     * After the initial navigation settles, re-derive primaryDomain from the
-     * real landed URL — same purpose as in AutomaticVisitor: when the user
-     * pasted a CM360 / ad-tracker URL, the 302 chain lands on the real site
-     * and internal traversal must respect that domain, not the tracker.
-     */
-    _resolveLandedDomain() {
-        if (!this.page) return;
-        const landedUrl = this.page.url();
-        const landedDomain = this._extractDomain(landedUrl);
-        if (!landedDomain || landedDomain === this.primaryDomain) return;
-        this.logger.info(`Domain resolved after redirect: ${this.primaryDomain} → ${landedDomain}`);
-        this.primaryDomain = landedDomain;
-        this.landedUrl = landedUrl;
-    }
-
-    /**
-     * Random delay helper
-     */
-    async _randomDelay(min, max) {
-        const delay = Math.floor(Math.random() * (max - min)) + min;
-        await new Promise(resolve => setTimeout(resolve, delay));
-    }
-
-    /**
-     * Cleanup
-     */
-    async _cleanup() {
-        try {
-            if (this.page) await this.page.close().catch(() => {});
-            if (this._usePersistentContext) {
-                if (this.context) await this.context.close().catch(() => {});
-            } else {
-                if (this.context) await this.context.close().catch(() => {});
-                if (this.browser) await this.browser.close().catch(() => {});
-            }
-        } catch (error) {
-            this.logger.debug(`Cleanup error: ${error.message}`);
-        }
-        this._cleanupTempDir();
-    }
-
-    /**
-     * Force close browser immediately - called by stop()
-     */
-    async forceClose() {
-        this.logger.info(`🛑 Force closing browser...`);
-        try {
-            if (this._usePersistentContext) {
-                if (this.context) {
-                    await this.context.close().catch(() => {});
-                    this.context = null;
-                    this.browser = null;
-                }
-            } else if (this.browser) {
-                await this.browser.close().catch(() => {});
-                this.browser = null;
-            }
-            if (this.context) this.context = null;
-            if (this.page) this.page = null;
-        } catch (error) {
-            // Ignore errors during force close
-        }
-        this._cleanupTempDir();
-    }
-
-    _cleanupTempDir() {
-        if (this._tempUserDataDir) {
-            try {
-                fs.rmSync(this._tempUserDataDir, { recursive: true, force: true });
-                this.logger.debug(`Cleaned up temp dir: ${this._tempUserDataDir}`);
-            } catch (e) {
-                this.logger.debug(`Temp dir cleanup failed: ${e.message}`);
-            }
-            this._tempUserDataDir = null;
-        }
-    }
 }
 
 module.exports = ManualVisitor;

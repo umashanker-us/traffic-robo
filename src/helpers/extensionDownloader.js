@@ -9,7 +9,7 @@ const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const { pipeline } = require('stream/promises');
-const { execSync } = require('child_process');
+const { execFileSync } = require('child_process');
 
 const SIMILARWEB_EXTENSION_ID = 'hoklmmgfnpapgjgcpechhaamimifchmp';
 
@@ -80,12 +80,18 @@ async function extractCrx(crxPath, destDir) {
 
     fs.mkdirSync(destDir, { recursive: true });
 
-    // PowerShell Expand-Archive — works on all Windows 10/11 without extra deps
+    // PowerShell Expand-Archive — works on all Windows 10/11 without extra deps.
+    // Paths go in as argv entries, not interpolated into the command string: a
+    // user profile like C:\Users\O'Brien would otherwise break the quoting.
     try {
-        execSync(
-            `powershell -NoProfile -Command "Expand-Archive -LiteralPath '${tmpZip}' -DestinationPath '${destDir}' -Force"`,
-            { timeout: 60000 }
-        );
+        execFileSync('powershell', [
+            '-NoProfile',
+            '-NonInteractive',
+            '-Command',
+            'Expand-Archive -LiteralPath $args[0] -DestinationPath $args[1] -Force',
+            tmpZip,
+            destDir,
+        ], { timeout: 60000, windowsHide: true });
     } finally {
         try { fs.unlinkSync(tmpZip); } catch {}
     }

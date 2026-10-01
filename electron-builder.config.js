@@ -35,7 +35,11 @@ module.exports = {
         {
             from: "data",
             to: "data",
-            filter: ["**/*"]
+            // Campaign replays are the user's own data — URLs and GA4
+            // measurement ids. They must never travel inside a shipped
+            // installer. .gitignore keeps them out of the repo but
+            // electron-builder reads the working tree, not git.
+            filter: ["**/*", "!replays/**", "!campaigns/**"]
         },
         {
             from: "playwright-browsers",

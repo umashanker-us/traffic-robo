@@ -15,6 +15,7 @@ const { getUserAgentList, getMatchingScreenSize, getMixedScreenSizes } = require
 const AutomaticVisitor = require('./automaticVisitor');
 const ManualVisitor = require('./manualVisitor');
 const { SessionReplayStore } = require('../helpers/sessionReplay');
+const { maskProxyUrl } = require('../helpers/sanitizeConfig');
 const { resolveTrafficSource } = require('../helpers/trafficSource');
 const { generateCSV } = require('../helpers/campaignExport');
 const { resolveRanges } = require('../helpers/campaignCsv');
@@ -85,6 +86,7 @@ class VisitLogic {
             customProxyPatterns = '',
             // Extension settings - NEW
             extensionEnabled = false,
+            extensionProfilePool = 0,
             extensionPath = '',
             // IP Rotation - NEW v2.4
             ipRotation = false,
@@ -176,7 +178,7 @@ class VisitLogic {
             if (proxyList.length > 1) {
                 logger.info(`Proxy ENABLED: ${proxyList.length} proxies (random rotation per visit)`);
             } else if (proxyList.length === 1) {
-                logger.info(`Proxy ENABLED: ${proxyList[0].substring(0, 60)}...`);
+                logger.info(`Proxy ENABLED: ${maskProxyUrl(proxyList[0])}`);
             }
             logger.info(proxyCollectEnabled
                 ? `Proxy Mode: Only /collect endpoints proxied (near-zero bandwidth)`
@@ -257,6 +259,7 @@ class VisitLogic {
                     location,
                     extensionEnabled,
                     extensionPath,
+                    extensionProfilePool,
                     ipRotation,
                     fastMode,
                     blockImages,
@@ -304,6 +307,7 @@ class VisitLogic {
                     location,
                     extensionEnabled,
                     extensionPath,
+                    extensionProfilePool,
                     proxyEnabled,
                     proxyUrl,
                     proxyCollectEnabled,
@@ -375,7 +379,7 @@ class VisitLogic {
             screenSizes, oldUserFlags, restrictToPrimaryDomain,
             previousURL, useBaseUrlForOldUser, playMode, adsBlock, proxyEnabled, proxyUrl,
             proxyCollectEnabled, customProxyEnabled, customProxyPatterns,
-            location, extensionEnabled, extensionPath, ipRotation,
+            location, extensionEnabled, extensionPath, extensionProfilePool, ipRotation,
             fastMode, blockImages, blockMedia, blockFonts, blockStyles, blockScripts,
             trafficSourceType, searchEngine, searchKeywords, referralUrls,
             socialPlatforms, utmSource, utmMedium, utmCampaign,
@@ -404,7 +408,7 @@ class VisitLogic {
             restrictToPrimaryDomain, previousURL, useBaseUrlForOldUser,
             playMode, adsBlock, proxyEnabled, proxyList, proxyUrl,
             proxyCollectEnabled, customProxyEnabled, customProxyPatterns,
-            location, extensionEnabled, extensionPath, ipRotation,
+            location, extensionEnabled, extensionPath, extensionProfilePool, ipRotation,
             fastMode, blockImages, blockMedia, blockFonts, blockStyles, blockScripts,
         };
 
@@ -536,7 +540,7 @@ class VisitLogic {
             restrictToPrimaryDomain, previousURL, useBaseUrlForOldUser,
             playMode, adsBlock, proxyEnabled, proxyList, proxyUrl,
             proxyCollectEnabled, customProxyEnabled, customProxyPatterns,
-            location, extensionEnabled, extensionPath, ipRotation,
+            location, extensionEnabled, extensionPath, extensionProfilePool, ipRotation,
             fastMode, blockImages, blockMedia, blockFonts, blockStyles, blockScripts,
         } = params;
 
@@ -613,6 +617,7 @@ class VisitLogic {
             location,
             extensionEnabled,
             extensionPath,
+            extensionProfilePool,
             ipRotation,
             fastMode,
             blockImages,
@@ -674,7 +679,7 @@ class VisitLogic {
             oldUserFlags, restrictToPrimaryDomain, previousURL, useBaseUrlForOldUser,
             avgSessionDuration,
             playMode, adsBlock, inputCommands, location,
-            extensionEnabled, extensionPath,
+            extensionEnabled, extensionPath, extensionProfilePool,
             proxyEnabled, proxyUrl,
             proxyCollectEnabled, customProxyEnabled, customProxyPatterns,
             ipRotation,
@@ -709,7 +714,7 @@ class VisitLogic {
         const baseTaskParams = {
             isReferer, threadDelay, memClear,
             playMode, adsBlock, inputCommands, location,
-            extensionEnabled, extensionPath,
+            extensionEnabled, extensionPath, extensionProfilePool,
             trafficSourceConfig,
             proxyEnabled: !!proxyEnabled,
             proxyList,
@@ -830,7 +835,7 @@ class VisitLogic {
             visitIndex, url, referer, userAgent, screenSize,
             isReferer, threadDelay, memClear,
             playMode, adsBlock, inputCommands, location,
-            extensionEnabled, extensionPath,
+            extensionEnabled, extensionPath, extensionProfilePool,
             trafficSourceConfig,
             proxyEnabled, proxyList,
             proxyCollectEnabled, customProxyEnabled, customProxyPatterns,
@@ -896,6 +901,7 @@ class VisitLogic {
             location,
             extensionEnabled,
             extensionPath,
+            extensionProfilePool,
             // Browser-level features ported from automatic mode
             proxyEnabled: !!proxyEnabled,
             proxyUrl: pickedProxyUrl,

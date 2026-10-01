@@ -19,6 +19,7 @@
  */
 
 const { getLogger } = require('./logger');
+const { maskProxyUrl } = require('./sanitizeConfig');
 
 class SessionReplay {
     /**
@@ -53,6 +54,8 @@ class SessionReplay {
             errors: 0,
             isBounce: false,
             isReturningUser: false,
+            extensionDetected: null,
+            downloadLanding: false,
         };
     }
 
@@ -137,7 +140,11 @@ class SessionReplay {
     logGA4Event(eventType, requestUrl, status = 200, proxied = false) {
         if (!this.captureGA) return;
 
+        // logGA4Event owns the GA4 counters now: it runs once per beacon, from
+        // _emitGA4Event. logRequest sees the same beacon and must not count it
+        // again, or every number doubles.
         this.stats.ga4EventsFired++;
+        this.stats.ga4EventsDetected = true;
         if (proxied) this.stats.proxyRequestsRouted++;
 
         this._addEvent('ga4_event', {
@@ -156,8 +163,8 @@ class SessionReplay {
      */
     logRequest(url, isGA, proxied) {
         if (isGA) {
-            this.stats.proxyRequestsRouted += proxied ? 1 : 0;
-            this.stats.ga4EventsFired++;
+            // Counters for GA traffic live in logGA4Event (see above). This call
+            // only contributes the timeline entry.
         } else {
             this.stats.directRequests++;
         }
@@ -190,6 +197,19 @@ class SessionReplay {
         }
 
         this._addEvent('behavior', { action, ...details });
+    }
+
+    /**
+     * Log whether the extension's content script actually reached the page.
+     * Without this the report had no way to say anything about the extension,
+     * which is why a loaded extension looked absent in every export.
+     * @param {boolean} detected
+     * @param {Object} details
+     */
+    logExtension(detected, details = {}) {
+        this.stats.extensionDetected = !!detected;
+        if (this.sessionInfo) this.sessionInfo.extensionVerified = !!detected;
+        this._addEvent('extension', { detected: !!detected, ...details });
     }
 
     /**
@@ -241,10 +261,34 @@ class SessionReplay {
             location: info.location || '',
             playMode: info.playMode || '',
             proxyMode: info.proxyMode || 'none',
+            // Masked: the report reads this to show which proxy city was used,
+            // and a replay file must never carry proxy credentials.
+            proxyUrl: maskProxyUrl(info.proxyUrl || ''),
             ipRotation: info.ipRotation || false,
             spoofedIP: info.spoofedIP || null,
             isOldUser: info.isOldUser || false,
+            extensionEnabled: info.extensionEnabled || false,
+            extensionLoaded: info.extensionLoaded || false,
+            extensionVerified: null,
+            extensionProfileId: info.extensionProfileId || null,
         };
+    }
+
+    /**
+     * Update session info after the context exists. spoofedIP and the
+     * extension's load state are only known once the browser has launched, but
+     * setSessionInfo runs before that to capture the plan — so the facts that
+     * arrive later are merged in here.
+     */
+    updateSessionInfo(patch) {
+        if (!this.sessionInfo) this.sessionInfo = {};
+        for (const [k, v] of Object.entries(patch || {})) {
+            if (k === 'proxyUrl') {
+                this.sessionInfo[k] = maskProxyUrl(v || '');
+            } else {
+                this.sessionInfo[k] = v;
+            }
+        }
     }
 
     // ==================== Output ====================

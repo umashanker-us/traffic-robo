@@ -1088,6 +1088,22 @@ googleads.g.doubleclick.net"
                     </div>
                 </div>
 
+                <div class="form-row">
+                    <div class="form-group" style="flex: 0 0 auto;">
+                        <label>Profile pool</label>
+                        <div style="display: flex; gap: 8px; align-items: center;">
+                            <input type="number" id="extensionProfilePool" min="0" max="64" value="0" disabled
+                                   style="width: 72px;" onchange="describeProfilePool()">
+                            <button class="btn btn-secondary" id="resetProfilesBtn" onclick="resetExtensionProfiles()"
+                                    disabled style="flex: none; padding: 6px 12px;">♻️ Reset</button>
+                        </div>
+                    </div>
+                    <div class="form-group" style="flex: 2;">
+                        <label>&nbsp;</label>
+                        <small id="profilePoolHint" style="color: var(--text-muted); display: block;"></small>
+                    </div>
+                </div>
+
                 <div id="extensionInfo" class="extension-info not-loaded" style="display: none;">
                     <span>📦</span>
                     <span id="extensionName">No extension loaded</span>
@@ -1631,6 +1647,7 @@ googleads.g.doubleclick.net"
                 // Extension settings - NEW
                 extensionEnabled: document.getElementById('extensionEnabled').checked,
                 extensionPath: document.getElementById('extensionPath').value,
+                extensionProfilePool: parseInt(document.getElementById('extensionProfilePool').value) || 0,
                 // IP Rotation - NEW v2.4
                 ipRotation: document.getElementById('ipRotation').checked,
                 // Fast Mode
@@ -1716,6 +1733,10 @@ googleads.g.doubleclick.net"
                 toggleExtensionSettings();
             }
             if (config.extensionPath) document.getElementById('extensionPath').value = config.extensionPath;
+            if (config.extensionProfilePool !== undefined) {
+                document.getElementById('extensionProfilePool').value = config.extensionProfilePool;
+            }
+            describeProfilePool();
             // IP Rotation - NEW v2.4
             if (config.ipRotation !== undefined) document.getElementById('ipRotation').checked = config.ipRotation;
             // Fast Mode
@@ -1796,6 +1817,33 @@ googleads.g.doubleclick.net"
         // Store previous mode for cancel
         
         // Toggle extension settings visibility - NEW
+        // Explains what the pool number actually does, because 0 silently means
+        // "the extension accumulates nothing" — the cause of empty SimilarWeb reports.
+        function describeProfilePool() {
+            const el = document.getElementById('extensionProfilePool');
+            const hint = document.getElementById('profilePoolHint');
+            if (!el || !hint) return;
+            const n = parseInt(el.value) || 0;
+            if (n === 0) {
+                hint.innerHTML = '<strong>0</strong> — a throwaway profile per visit. The extension is reinstalled'
+                    + ' every visit and keeps no history, so panels like SimilarWeb report nothing.';
+            } else {
+                hint.innerHTML = '<strong>' + n + '</strong> reusable profile' + (n === 1 ? '' : 's')
+                    + ' — the extension looks like ' + n + ' device' + (n === 1 ? '' : 's')
+                    + ' that browse repeatedly, so its history accumulates. Match this to your thread count.'
+                    + ' GA4 new/returning stays correct: GA cookies are cleared on a reused profile.';
+            }
+        }
+
+        async function resetExtensionProfiles() {
+            const result = await api.resetExtensionProfiles();
+            if (result && result.success) {
+                addLog('info', 'Extension profile pool wiped — the extension starts fresh on the next run');
+            } else {
+                addLog('error', 'Could not reset extension profiles: ' + ((result && result.error) || 'unknown'));
+            }
+        }
+
         async function toggleExtensionSettings() {
             const enabled = document.getElementById('extensionEnabled').checked;
             const extensionPath = document.getElementById('extensionPath');
@@ -1806,6 +1854,9 @@ googleads.g.doubleclick.net"
             extensionPath.disabled = !enabled;
             browseBtn.disabled = !enabled;
             downloadBtn.disabled = !enabled;
+            document.getElementById('extensionProfilePool').disabled = !enabled;
+            document.getElementById('resetProfilesBtn').disabled = !enabled;
+            describeProfilePool();
 
             if (enabled) {
                 extensionInfo.style.display = 'flex';
@@ -2183,6 +2234,7 @@ googleads.g.doubleclick.net"
             document.getElementById('fastModeOptions').style.display = 'none';
             // Extension settings reset
             document.getElementById('extensionEnabled').checked = false;
+            document.getElementById('extensionProfilePool').value = 0;
             document.getElementById('extensionPath').value = '';
             document.getElementById('extensionName').textContent = 'No extension loaded';
             document.getElementById('extensionInfo').classList.add('not-loaded');

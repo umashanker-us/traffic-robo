@@ -68,8 +68,26 @@ function countGA4Events(timeline) {
  */
 function getVisitStatus(replay) {
     if (replay.stats.errors > 0) return 'Error';
+    // A landing URL that was a file download is not a failure — the tracker
+    // hops fired — but it is not a session either, and reporting it as OK with
+    // zero GA4 events looked like a silently broken visit.
+    if (replay.stats.downloadLanding) return 'Download';
     if (replay.stats.isBounce) return 'Bounce';
     return 'OK';
+}
+
+/**
+ * Human-readable extension outcome for one visit.
+ */
+function getExtensionStatus(sessionInfo, stats) {
+    if (!sessionInfo.extensionEnabled) return 'Off';
+    if (!sessionInfo.extensionLoaded) return 'Not loaded';
+    const verified = sessionInfo.extensionVerified !== undefined
+        ? sessionInfo.extensionVerified
+        : stats.extensionDetected;
+    if (verified === true) return 'Active';
+    if (verified === false) return 'Not detected';
+    return 'Unverified';
 }
 
 /**
@@ -102,6 +120,11 @@ function buildVisitRow(replay) {
         endTime: replay.endTime || '',
         status: getVisitStatus(replay),
         isReturningUser: sessionInfo.isOldUser ? 'Yes' : 'No',
+        extensionStatus: getExtensionStatus(sessionInfo, replay.stats || {}),
+        extensionProfile: sessionInfo.extensionProfileId || '',
+        spoofedIP: sessionInfo.spoofedIP || '',
+        scrollEvents: (replay.stats || {}).scrollEvents || 0,
+        mouseEvents: (replay.stats || {}).mouseEvents || 0,
     };
 }
 
@@ -112,7 +135,9 @@ function generateCSV(replays) {
     const headers = [
         'Visit#', 'URL', 'ProxyUsed', 'ProxyStatus', 'Duration(s)', 'Pages',
         'BounceOrNot', 'IsReturningUser', 'UserAgent', 'ScreenSize', 'Location',
-        'GA4EventsCount', 'GA4EventTypes', 'StartTime', 'EndTime', 'Status'
+        'SpoofedIP', 'GA4EventsCount', 'GA4EventTypes', 'ScrollEvents',
+        'MouseEvents', 'Extension', 'ExtensionProfile', 'StartTime', 'EndTime',
+        'Status'
     ];
 
     const rows = replays.map(replay => {
@@ -129,8 +154,13 @@ function generateCSV(replays) {
             row.userAgent,
             row.screenSize,
             row.location,
+            row.spoofedIP,
             row.ga4EventsCount,
             csvEscape(row.ga4EventTypes),
+            row.scrollEvents,
+            row.mouseEvents,
+            row.extensionStatus,
+            row.extensionProfile,
             row.startTime,
             row.endTime,
             row.status,
@@ -162,6 +192,13 @@ function generateJSON(replays, campaignConfig) {
     const completed = replays.length;
     const failed = replays.filter(r => r.stats.errors > 0).length;
     const bounces = replays.filter(r => r.stats.isBounce).length;
+    const downloadLandings = replays.filter(r => r.stats.downloadLanding).length;
+    const extensionEnabled = replays.filter(r => (r.sessionInfo || {}).extensionEnabled).length;
+    const extensionActive = replays.filter(r => {
+        const si = r.sessionInfo || {};
+        const verified = si.extensionVerified !== undefined ? si.extensionVerified : r.stats.extensionDetected;
+        return si.extensionEnabled && verified === true;
+    }).length;
     const durations = replays.map(r => r.durationSec);
     const pages = replays.map(r => r.stats.pagesVisited);
 
@@ -216,6 +253,11 @@ function generateJSON(replays, campaignConfig) {
             ga4Stats: {
                 totalEvents: totalGA4,
                 eventTypes: Array.from(allEventTypes),
+            },
+            downloadLandings,
+            extensionStats: {
+                visitsWithExtension: extensionEnabled,
+                visitsVerifiedActive: extensionActive,
             },
             duration: {
                 start: campaignStart,

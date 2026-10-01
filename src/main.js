@@ -11,6 +11,8 @@ const path = require('path');
 const fs = require('fs');
 const VisitLogic = require('./core/visitLogic');
 const { logger, getCampaignLogDir, cleanOldLogs } = require('./helpers/logger');
+const { pruneReplays, pruneLooseLogs } = require('./helpers/retention');
+const profilePool = require('./helpers/profilePool');
 const Constants = require('./helpers/constants');
 const { generateCSV, generateJSON, getExportFilename } = require('./helpers/campaignExport');
 const { setDebugAllTracking, getDebugAllTracking } = require('./core/automaticVisitor');
@@ -56,6 +58,16 @@ function createWindow() {
 
 app.whenReady().then(() => {
     cleanOldLogs();
+    // Replays and the old flat log files had no cap at all — the replay
+    // directory had reached 483 files with nothing ever removing one.
+    const logs = pruneLooseLogs();
+    const replays = pruneReplays();
+    if (logs.removed || replays.removed) {
+        logger.info(`Retention: removed ${replays.removed} old replay(s) and ${logs.removed} loose log file(s)`);
+    }
+    // Pooled extension profiles live beside the app's own data, not in the OS
+    // temp dir, so they survive a reboot and keep accumulating panel history.
+    profilePool.setBaseDir(app.getPath('userData'));
     createWindow();
 });
 
@@ -145,6 +157,7 @@ ipcMain.handle('start-traffic', async (event, config) => {
             // Extension settings - NEW
             extensionEnabled: config.extensionEnabled || false,
             extensionPath: config.extensionPath || '',
+            extensionProfilePool: parseInt(config.extensionProfilePool) || 0,
             // IP Rotation - NEW v2.4
             ipRotation: config.ipRotation || false,
             // Fast Mode
@@ -263,6 +276,19 @@ ipcMain.handle('load-config', async () => {
  * Resolve the best available SimilarWeb extension path.
  * Priority: 1) userData (downloaded/updated)  2) bundled in extraResources  3) dev path
  */
+ipcMain.handle('reset-extension-profiles', () => {
+    try {
+        const result = profilePool.resetPool();
+        logger.info(`Extension profile pool reset: ${result.dir}`);
+        return { success: true, ...result };
+    } catch (error) {
+        logger.warn(`Extension profile reset failed: ${error.message}`);
+        return { success: false, error: error.message };
+    }
+});
+
+ipcMain.handle('get-extension-profile-stats', () => profilePool.getPoolStats());
+
 ipcMain.handle('get-bundled-extension', () => {
     const candidates = [
         getExtensionDir(app.getPath('userData')),
