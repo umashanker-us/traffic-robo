@@ -152,11 +152,19 @@ class ManualVisitor {
             }
 
             await this._visitPage();
-            await this._executeCommands();
+
+            if (this._downloadLanding) {
+                // No page to drive and no gtag to fire — commands and the
+                // session hold would buy nothing.
+                this.logger.warn(`⬇ Visit ended at a download (${this._downloadLanding.filename || this._downloadLanding.url}) — commands skipped, no GA4 hit is possible for a file URL`);
+                this.logger.warn(`   Use an HTML landing page as the campaign URL if you need GA4 sessions.`);
+            } else {
+                await this._executeCommands();
+            }
 
             // avgSessionDuration fallback wait — if commands finished fast, hold the
             // page open so GA4 records a session of roughly the configured duration.
-            if (this.avgSessionDuration > 0) {
+            if (this.avgSessionDuration > 0 && !this._downloadLanding) {
                 const targetMs = this.avgSessionDuration * 1000;
                 const elapsedMs = Date.now() - startTime;
                 const remainingMs = targetMs - elapsedMs;
@@ -272,6 +280,11 @@ class ManualVisitor {
         this._uaMetadata = uaMetadata;
         const contextOptions = {
             userAgent: this.userAgent,
+            // A landing URL that resolves to a file (PDF click-trackers do this)
+            // would otherwise be downloaded in full — megabytes per visit, for a
+            // page that can never fire a GA4 hit. Refusing the download makes
+            // Chromium discard the body instead.
+            acceptDownloads: false,
             locale: this.locationData.locale,
             timezoneId: this.locationData.timezone,
             geolocation: {
@@ -361,6 +374,7 @@ class ManualVisitor {
         // The context 'page' listener also fires for this page, but the CDP
         // override has to land before the first navigation — so await it here.
         await this._applyHintsToPage(this.page);
+        this._watchForDownloadLanding(this.page);
 
         for (const p of this.context.pages()) {
             if (p !== this.page) {
@@ -520,6 +534,41 @@ class ManualVisitor {
      * If visitReferer is true (e.g. Referral mode), navigate to the referer
      * page first, then redirect to the campaign URL so document.referrer is set.
      */
+    /**
+     * A navigation that Chromium answers with a download never becomes a page:
+     * goto rejects, nothing renders, and no gtag can fire. Record it so the
+     * visit can end cleanly instead of being reported as a failure.
+     */
+    _watchForDownloadLanding(page) {
+        page.on('download', (download) => {
+            this._downloadLanding = {
+                url: download.url(),
+                filename: download.suggestedFilename(),
+            };
+            // acceptDownloads:false already discards the body; cancelling makes
+            // it explicit and releases the download slot immediately.
+            Promise.resolve(download.cancel()).catch(() => {});
+        });
+    }
+
+    /**
+     * Chromium decides "this is a download" slightly after the navigation
+     * fails, so a failed goto gets a short grace period for the event.
+     */
+    async _awaitDownloadSignal(timeout = 750) {
+        if (this._downloadLanding) return this._downloadLanding;
+        try {
+            const download = await this.page.waitForEvent('download', { timeout });
+            this._downloadLanding = this._downloadLanding || {
+                url: download.url(),
+                filename: download.suggestedFilename(),
+            };
+        } catch {
+            // no download — a real navigation failure
+        }
+        return this._downloadLanding;
+    }
+
     async _visitPage() {
         // Pre-resolve click-tracker redirect chain through proxy (see automaticVisitor
         // for rationale). Browser then loads only the final landing page.
@@ -559,10 +608,21 @@ class ManualVisitor {
                 });
             }
         } else {
-            await this.page.goto(urlToNavigate, {
-                waitUntil: 'domcontentloaded',
-                timeout: 60000
-            });
+            try {
+                await this.page.goto(urlToNavigate, {
+                    waitUntil: 'domcontentloaded',
+                    timeout: 60000
+                });
+            } catch (error) {
+                // Landing URL answered with a file instead of a page (PDF click
+                // trackers, asset links). Tracker hops already registered through
+                // the proxy, so the navigation error is expected, not a failure.
+                const landing = await this._awaitDownloadSignal();
+                if (!landing) throw error;
+                this.logger.warn(`⬇ Landing URL is a download: ${landing.filename || landing.url}`);
+                if (this.replay) this.replay._addEvent('download_landing', landing);
+                return;
+            }
         }
 
         // Resolve true primary domain from the landed URL — if the URL was a

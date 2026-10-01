@@ -262,7 +262,13 @@ class AutomaticVisitor {
             }
 
             // CRITICAL: Check if this is a BOUNCE visit
-            if (this.visit.isBounce()) {
+            if (this._downloadLanding) {
+                // No page to sit on and no gtag to fire — waiting out the
+                // session or opening more pages would buy nothing. Proxy/tracker
+                // hops already happened in _visitFirstPage.
+                this.logger.warn(`⬇ Visit ended at a download (${this._downloadLanding.filename || this._downloadLanding.url}) — no GA4 hit is possible for a file URL`);
+                this.logger.warn(`   Use an HTML landing page as the campaign URL if you need GA4 sessions.`);
+            } else if (this.visit.isBounce()) {
                 // Bounce visit - NO WAIT, exit immediately.
                 // Measure from _pageStartTime (the navigation start) so the UI's bounce
                 // duration matches what GA4 actually sees as engagement_time_msec.
@@ -395,6 +401,41 @@ class AutomaticVisitor {
      * Visit the first/main campaign page
      * CRITICAL: Must wait for GA4 scripts to load and fire events
      */
+    /**
+     * A navigation that Chromium answers with a download never becomes a page:
+     * goto rejects, nothing renders, and no gtag can fire. Record it so the
+     * visit can end cleanly instead of being reported as a failure.
+     */
+    _watchForDownloadLanding(page) {
+        page.on('download', (download) => {
+            this._downloadLanding = {
+                url: download.url(),
+                filename: download.suggestedFilename(),
+            };
+            // acceptDownloads:false already discards the body; cancelling makes
+            // it explicit and releases the download slot immediately.
+            Promise.resolve(download.cancel()).catch(() => {});
+        });
+    }
+
+    /**
+     * Chromium decides "this is a download" slightly after the navigation
+     * fails, so a failed goto gets a short grace period for the event.
+     */
+    async _awaitDownloadSignal(timeout = 750) {
+        if (this._downloadLanding) return this._downloadLanding;
+        try {
+            const download = await this.page.waitForEvent('download', { timeout });
+            this._downloadLanding = this._downloadLanding || {
+                url: download.url(),
+                filename: download.suggestedFilename(),
+            };
+        } catch {
+            // no download — a real navigation failure
+        }
+        return this._downloadLanding;
+    }
+
     async _visitFirstPage() {
         // If campaign URL is a click tracker (matches custom-proxy patterns),
         // walk the redirect chain through the proxy in Node first. Each hop
@@ -508,6 +549,16 @@ class AutomaticVisitor {
             }
 
         } catch (error) {
+            // Landing URL answered with a file instead of a page (PDF click
+            // trackers, asset links). The tracker hops already registered
+            // through the proxy, so the visit did its job — the navigation
+            // error is expected, not a failure.
+            const landing = await this._awaitDownloadSignal();
+            if (landing) {
+                this.logger.warn(`⬇ Landing URL is a download: ${landing.filename || landing.url}`);
+                this.replay._addEvent('download_landing', landing);
+                return;
+            }
             this.replay.logError('first_page', error.message);
             this.logger.error(`Failed to load first page: ${error.message}`);
             throw error;
@@ -1139,6 +1190,11 @@ class AutomaticVisitor {
         this._uaMetadata = uaMetadata;
         const contextOptions = {
             userAgent: this.userAgent,
+            // A landing URL that resolves to a file (PDF click-trackers do this)
+            // would otherwise be downloaded in full — megabytes per visit, for a
+            // page that can never fire a GA4 hit. Refusing the download makes
+            // Chromium discard the body instead.
+            acceptDownloads: false,
             locale: this.locationData.locale,
             timezoneId: this.locationData.timezone,
             geolocation: {
@@ -1237,6 +1293,7 @@ class AutomaticVisitor {
         // The context 'page' listener also fires for this page, but the CDP
         // override has to land before the first navigation — so await it here.
         await this._applyHintsToPage(this.page);
+        this._watchForDownloadLanding(this.page);
 
         // Close any extension pages that opened before the listener was set up
         for (const p of this.context.pages()) {
