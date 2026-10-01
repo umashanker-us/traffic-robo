@@ -28,6 +28,7 @@ const Constants = require('../helpers/constants');
 const { ProxyRouter, isGACollectRequest, isGAScript, createPlaywrightProxy, parseProxyString, parseCustomProxyPatterns, matchesCustomProxyPattern, resolveTrackerChain } = require('../helpers/proxyRouter');
 const { generateIndianIP } = require('../helpers/indianIP');
 const { SessionReplay } = require('../helpers/sessionReplay');
+const { buildUserAgentMetadata, buildClientHintHeaders, applyUserAgentOverride, isChromiumUA } = require('../helpers/clientHints');
 const { patchCollectUrlForReturning } = require('../helpers/collectPatch');
 
 // ===== Debug All Tracking Pixels Toggle =====
@@ -1130,6 +1131,8 @@ class AutomaticVisitor {
         const isHeadless = this.playMode === Constants.PLAY_MODES.FASTEST ||
                           this.playMode === Constants.PLAY_MODES.FAST;
         const isMobileUA = this.userAgent.includes('Mobile');
+        const { metadata: uaMetadata } = buildUserAgentMetadata(this.userAgent);
+        this._uaMetadata = uaMetadata;
         const contextOptions = {
             userAgent: this.userAgent,
             locale: this.locationData.locale,
@@ -1141,7 +1144,11 @@ class AutomaticVisitor {
             permissions: ['geolocation'],
             javaScriptEnabled: true,
         };
-        if (isHeadless) {
+        // Mobile emulation must be on in headed mode too: `isMobile` is what
+        // flips sec-ch-ua-mobile to ?1, and GA4 reads that hint (uamb) rather
+        // than the "Mobile" token in the UA string to pick a device category.
+        // Without it every headed mobile session landed in GA4 as Desktop.
+        if (isHeadless || isMobileUA) {
             contextOptions.viewport = {
                 width: this.screenSize.width,
                 height: this.screenSize.height
@@ -1153,10 +1160,13 @@ class AutomaticVisitor {
             contextOptions.viewport = null;
         }
 
+        // Client hints must ride along as real headers: route.continue() in the
+        // merged route handler rebuilds request headers from Playwright's
+        // network layer, which would otherwise re-expose Chromium's own brands.
+        contextOptions.extraHTTPHeaders = buildClientHintHeaders(uaMetadata);
+
         if (this.isReferer && this.referer) {
-            contextOptions.extraHTTPHeaders = {
-                'Referer': this.referer
-            };
+            contextOptions.extraHTTPHeaders['Referer'] = this.referer;
         }
 
         if (this.ipRotation) {
@@ -1218,7 +1228,11 @@ class AutomaticVisitor {
 
         await this._setupMergedRouteHandler();
         await this._addStealthScripts();
+        await this._applyClientHints();
         this.page = await this.context.newPage();
+        // The context 'page' listener also fires for this page, but the CDP
+        // override has to land before the first navigation — so await it here.
+        await this._applyHintsToPage(this.page);
 
         // Close any extension pages that opened before the listener was set up
         for (const p of this.context.pages()) {
@@ -1392,13 +1406,56 @@ class AutomaticVisitor {
 
     async _addStealthScripts() {
         const languages = Constants.getLanguagesForLocation(this.location);
+        // Firefox and Safari expose no navigator.userAgentData at all, so for a
+        // non-Chromium UA the object itself has to go — otherwise the UA string
+        // and the hints contradict each other.
+        const hideUserAgentData = !isChromiumUA(this.userAgent);
 
-        await this.context.addInitScript((langs) => {
+        await this.context.addInitScript(({ langs, hideUAData }) => {
             Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
             Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
             Object.defineProperty(navigator, 'languages', { get: () => langs });
             window.chrome = { runtime: {} };
-        }, languages);
+            if (hideUAData) {
+                try { delete Object.getPrototypeOf(navigator).userAgentData; } catch {}
+                try { Object.defineProperty(navigator, 'userAgentData', { get: () => undefined }); } catch {}
+            }
+        }, { langs: languages, hideUAData: hideUserAgentData });
+    }
+
+    /**
+     * Push UA client hints that match this.userAgent.
+     *
+     * Playwright's `userAgent` option only rewrites the UA header — `sec-ch-ua*`
+     * and `navigator.userAgentData` keep Chromium's own values, and those are
+     * what GA4 actually reads (uamb / uap / uafvl). Left alone, every session
+     * reported as Device: Desktop, Browser: Mozilla. Has to be applied per page
+     * over CDP, so new pages are hooked as they open.
+     */
+    async _applyClientHints() {
+        const metadata = this._uaMetadata || buildUserAgentMetadata(this.userAgent).metadata;
+        this._hintedPages = new WeakSet();
+
+        const apply = async (page) => {
+            if (!page || this._hintedPages.has(page)) return;
+            this._hintedPages.add(page);
+            try {
+                await applyUserAgentOverride(this.context, page, {
+                    userAgent: this.userAgent,
+                    metadata,
+                });
+            } catch (err) {
+                // Page may already be closing (extension tabs do this)
+                this.logger.debug(`Client hints override failed: ${err.message}`);
+            }
+        };
+        this._applyHintsToPage = apply;
+
+        this.context.on('page', (page) => { apply(page).catch(() => {}); });
+        await Promise.all(this.context.pages().map(apply));
+
+        const brands = metadata.brands.map(b => `${b.brand}/${b.version}`).join(', ');
+        this.logger.info(`Client hints: mobile=${metadata.mobile} | platform=${metadata.platform || 'suppressed'} | brands=[${brands || 'suppressed'}]`);
     }
 
     /**
