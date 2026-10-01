@@ -86,6 +86,10 @@ class AutomaticVisitor {
         
         // Proxy settings — only /collect endpoints proxied
         this.proxyEnabled = config.proxyEnabled || false;
+        // Proxying /collect is what spoofs GA4's reported location, but it is
+        // also the bulk of proxy bandwidth. Off → beacons go direct (real IP
+        // decides GA4 location) and only custom patterns use the proxy.
+        this.proxyCollectEnabled = config.proxyCollectEnabled !== false;
         this.proxyUrl = config.proxyUrl || '';
         this.proxyConfig = this.proxyEnabled ? parseProxyString(this.proxyUrl) : null;
         this.proxyRouter = null;
@@ -1250,12 +1254,35 @@ class AutomaticVisitor {
      * FIXED: Merged route handler for proxy routing + ad blocking
      * This combines both functionalities in a single handler to prevent conflicts
      */
+    /**
+     * Let a /collect beacon go direct, still applying the returning-user patch
+     * and reporting it to the replay log + live event monitor. Used both when
+     * no proxy is configured and when collect proxying is switched off.
+     */
+    async _handleDirectCollect(route, url) {
+        if (this.isOldUser) {
+            const patched = patchCollectUrlForReturning(url);
+            this.logger.info(`RETURNING USER PATCH: patched=${patched ? 'YES' : 'NO'} | had _fv=${url.includes('_fv=')} sct=1=${url.includes('sct=1')}`);
+            if (patched) {
+                this.logger.info('RETURNING USER FIX: Removed _fv, set sct=2 for /collect request');
+                this.replay.logRequest(patched, true, false);
+                this._emitGA4Event(patched, false);
+                await route.continue({ url: patched });
+                return;
+            }
+        }
+        this.replay.logRequest(url, true, false);
+        this._emitGA4Event(url, false);
+        await route.continue();
+    }
+
     async _setupMergedRouteHandler() {
         // Initialize proxy router
         if (this.proxyEnabled && this.proxyConfig) {
             this.proxyRouter = new ProxyRouter({
                 proxyUrl: this.proxyUrl,
                 enabled: true,
+                collectEnabled: this.proxyCollectEnabled,
                 threadId: this.threadId
             });
         }
@@ -1299,6 +1326,15 @@ class AutomaticVisitor {
             
             // 3. Proxy — only /collect endpoints via proxy, everything else DIRECT
             if (self.proxyEnabled && self.proxyRouter) {
+                if (isGACollectRequest(url) && !self.proxyCollectEnabled) {
+                    // Collect proxying off — beacon goes direct, but still gets
+                    // the returning-user patch and shows up in replay/monitor.
+                    self.proxyRouter.stats.totalRequests++;
+                    self.proxyRouter.stats.directRequests++;
+                    self._emitProxyStats(url, false);
+                    await self._handleDirectCollect(route, url);
+                    return;
+                }
                 if (isGACollectRequest(url)) {
                     // Returning user fix: patch /collect params
                     let collectUrl = url;
@@ -1370,20 +1406,8 @@ class AutomaticVisitor {
             // 3b. No proxy but still track GA /collect requests for replay + monitor
             if (isGACollectRequest(url)) {
                 self.logger.info(`ROUTE HANDLER: isOldUser=${self.isOldUser} | /collect detected`);
-                // Returning user fix: patch /collect params
-                if (self.isOldUser) {
-                    const patched = patchCollectUrlForReturning(url);
-                    self.logger.info(`RETURNING USER PATCH: patched=${patched ? 'YES' : 'NO'} | had _fv=${url.includes('_fv=')} sct=1=${url.includes('sct=1')}`);
-                    if (patched) {
-                        self.logger.info('RETURNING USER FIX: Removed _fv, set sct=2 for /collect request');
-                        self.replay.logRequest(patched, true, false);
-                        self._emitGA4Event(patched, false);
-                        await route.continue({ url: patched });
-                        return;
-                    }
-                }
-                self.replay.logRequest(url, true, false);
-                self._emitGA4Event(url, false);
+                await self._handleDirectCollect(route, url);
+                return;
             } else if (debugAllTracking && isTrackingRequest(urlLower)) {
                 self.replay.logRequest(url, false, false);
             }

@@ -137,6 +137,7 @@ ipcMain.handle('start-traffic', async (event, config) => {
             adsBlock: config.adsBlock || false,
             // Proxy settings - Only GA requests use proxy
             proxyEnabled: config.proxyEnabled || false,
+            proxyCollectEnabled: config.proxyCollectEnabled !== false,
             proxyUrl: config.proxyUrl || '',
             // Custom proxy URL patterns (CM360 / ad trackers) — route extra URLs through proxy
             customProxyEnabled: config.customProxyEnabled || false,

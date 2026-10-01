@@ -52,6 +52,10 @@ class ManualVisitor {
 
         // Proxy settings — only /collect endpoints proxied (matches AutomaticVisitor)
         this.proxyEnabled = !!config.proxyEnabled;
+        // Proxying /collect is what spoofs GA4's reported location, but it is
+        // also the bulk of proxy bandwidth. Off → beacons go direct (real IP
+        // decides GA4 location) and only custom patterns use the proxy.
+        this.proxyCollectEnabled = config.proxyCollectEnabled !== false;
         this.proxyUrl = config.proxyUrl || '';
         this.proxyConfig = this.proxyEnabled ? parseProxyString(this.proxyUrl) : null;
         this.proxyRouter = null;
@@ -373,11 +377,30 @@ class ManualVisitor {
      * has parity for ad blocking, fast-mode resource blocking, /collect-only
      * proxy routing, and returning-user /collect parameter patching.
      */
+    /**
+     * Let a /collect beacon go direct, still applying the returning-user patch
+     * and logging it to the replay. Used both when no proxy is configured and
+     * when collect proxying is switched off.
+     */
+    async _handleDirectCollect(route, url) {
+        if (this.isOldUser) {
+            const patched = patchCollectUrlForReturning(url);
+            if (patched) {
+                if (this.replay) this.replay.logRequest(patched, true, false);
+                await route.continue({ url: patched });
+                return;
+            }
+        }
+        if (this.replay) this.replay.logRequest(url, true, false);
+        await route.continue();
+    }
+
     async _setupMergedRouteHandler() {
         if (this.proxyEnabled && this.proxyConfig) {
             this.proxyRouter = new ProxyRouter({
                 proxyUrl: this.proxyUrl,
                 enabled: true,
+                collectEnabled: this.proxyCollectEnabled,
                 threadId: this.threadId
             });
         }
@@ -417,6 +440,14 @@ class ManualVisitor {
 
             // 3. Proxy: only /collect beacons through proxy, everything else direct
             if (self.proxyEnabled && self.proxyRouter) {
+                if (isGACollectRequest(url) && !self.proxyCollectEnabled) {
+                    // Collect proxying off — beacon goes direct, but still gets
+                    // the returning-user patch and shows up in the replay log.
+                    self.proxyRouter.stats.totalRequests++;
+                    self.proxyRouter.stats.directRequests++;
+                    await self._handleDirectCollect(route, url);
+                    return;
+                }
                 if (isGACollectRequest(url)) {
                     let collectUrl = url;
                     if (self.isOldUser) {
@@ -471,15 +502,8 @@ class ManualVisitor {
 
             // 4. No proxy — still track /collect for replay + apply returning-user patch
             if (isGACollectRequest(url)) {
-                if (self.isOldUser) {
-                    const patched = patchCollectUrlForReturning(url);
-                    if (patched) {
-                        if (self.replay) self.replay.logRequest(patched, true, false);
-                        await route.continue({ url: patched });
-                        return;
-                    }
-                }
-                if (self.replay) self.replay.logRequest(url, true, false);
+                await self._handleDirectCollect(route, url);
+                return;
             }
 
             await route.continue();

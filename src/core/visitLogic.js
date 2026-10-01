@@ -78,6 +78,7 @@ class VisitLogic {
             adsBlock = false,
             // Proxy settings (proxy is always /collect-only — page loads go direct)
             proxyEnabled = false,
+            proxyCollectEnabled = true,
             proxyUrl = '',
             // Custom proxy URL patterns (CM360 / ad trackers) — paste click URL into campaignUrl
             customProxyEnabled = false,
@@ -177,7 +178,9 @@ class VisitLogic {
             } else if (proxyList.length === 1) {
                 logger.info(`Proxy ENABLED: ${proxyList[0].substring(0, 60)}...`);
             }
-            logger.info(`Proxy Mode: Only /collect endpoints proxied (near-zero bandwidth)`);
+            logger.info(proxyCollectEnabled
+                ? `Proxy Mode: Only /collect endpoints proxied (near-zero bandwidth)`
+                : `Proxy Mode: /collect DIRECT — only custom URL patterns proxied (GA4 location follows the real IP)`);
         } else {
             logger.info(`Proxy: DISABLED`);
         }
@@ -248,6 +251,7 @@ class VisitLogic {
                     adsBlock,
                     proxyEnabled,
                     proxyUrl,
+                    proxyCollectEnabled,
                     customProxyEnabled,
                     customProxyPatterns,
                     location,
@@ -302,6 +306,7 @@ class VisitLogic {
                     extensionPath,
                     proxyEnabled,
                     proxyUrl,
+                    proxyCollectEnabled,
                     customProxyEnabled,
                     customProxyPatterns,
                     ipRotation,
@@ -369,7 +374,7 @@ class VisitLogic {
             csvVisitsByUrl, resolvedCsvRows,
             screenSizes, oldUserFlags, restrictToPrimaryDomain,
             previousURL, useBaseUrlForOldUser, playMode, adsBlock, proxyEnabled, proxyUrl,
-            customProxyEnabled, customProxyPatterns,
+            proxyCollectEnabled, customProxyEnabled, customProxyPatterns,
             location, extensionEnabled, extensionPath, ipRotation,
             fastMode, blockImages, blockMedia, blockFonts, blockStyles, blockScripts,
             trafficSourceType, searchEngine, searchKeywords, referralUrls,
@@ -398,7 +403,7 @@ class VisitLogic {
             trafficSourceConfig, isReferer, threadDelay, memClear,
             restrictToPrimaryDomain, previousURL, useBaseUrlForOldUser,
             playMode, adsBlock, proxyEnabled, proxyList, proxyUrl,
-            customProxyEnabled, customProxyPatterns,
+            proxyCollectEnabled, customProxyEnabled, customProxyPatterns,
             location, extensionEnabled, extensionPath, ipRotation,
             fastMode, blockImages, blockMedia, blockFonts, blockStyles, blockScripts,
         };
@@ -530,7 +535,7 @@ class VisitLogic {
             trafficSourceConfig, isReferer, threadDelay, memClear,
             restrictToPrimaryDomain, previousURL, useBaseUrlForOldUser,
             playMode, adsBlock, proxyEnabled, proxyList, proxyUrl,
-            customProxyEnabled, customProxyPatterns,
+            proxyCollectEnabled, customProxyEnabled, customProxyPatterns,
             location, extensionEnabled, extensionPath, ipRotation,
             fastMode, blockImages, blockMedia, blockFonts, blockStyles, blockScripts,
         } = params;
@@ -602,6 +607,7 @@ class VisitLogic {
             proxyUrl: proxyList.length > 0
                 ? proxyList[Math.floor(Math.random() * proxyList.length)]
                 : proxyUrl,
+            proxyCollectEnabled,
             customProxyEnabled,
             customProxyPatterns,
             location,
@@ -670,7 +676,7 @@ class VisitLogic {
             playMode, adsBlock, inputCommands, location,
             extensionEnabled, extensionPath,
             proxyEnabled, proxyUrl,
-            customProxyEnabled, customProxyPatterns,
+            proxyCollectEnabled, customProxyEnabled, customProxyPatterns,
             ipRotation,
             fastMode, blockImages, blockMedia, blockFonts, blockStyles, blockScripts,
             trafficSourceType, searchEngine, searchKeywords, referralUrls,
@@ -707,6 +713,7 @@ class VisitLogic {
             trafficSourceConfig,
             proxyEnabled: !!proxyEnabled,
             proxyList,
+            proxyCollectEnabled: proxyCollectEnabled !== false,
             customProxyEnabled: !!customProxyEnabled,
             customProxyPatterns: customProxyPatterns || '',
             ipRotation: !!ipRotation,
@@ -826,7 +833,7 @@ class VisitLogic {
             extensionEnabled, extensionPath,
             trafficSourceConfig,
             proxyEnabled, proxyList,
-            customProxyEnabled, customProxyPatterns,
+            proxyCollectEnabled, customProxyEnabled, customProxyPatterns,
             ipRotation,
             fastMode, blockImages, blockMedia, blockFonts, blockStyles, blockScripts,
             restrictToPrimaryDomain, previousURL, useBaseUrlForOldUser, avgSessionDuration,
@@ -892,6 +899,7 @@ class VisitLogic {
             // Browser-level features ported from automatic mode
             proxyEnabled: !!proxyEnabled,
             proxyUrl: pickedProxyUrl,
+            proxyCollectEnabled: proxyCollectEnabled !== false,
             customProxyEnabled: !!customProxyEnabled,
             customProxyPatterns: customProxyPatterns || '',
             ipRotation: !!ipRotation,

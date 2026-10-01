@@ -947,6 +947,14 @@ gate.decodo.com:7000:user-country-in-city-delhi:password"
                     </small>
                 </div>
 
+                <div class="checkbox-group" style="margin-top: 10px;">
+                    <input type="checkbox" id="proxyCollectEnabled" checked onchange="toggleProxyCollect()">
+                    <label class="checkbox-label" for="proxyCollectEnabled">Proxy GA4 /collect beacons (spoofs GA4 location)</label>
+                </div>
+                <small style="color: var(--text-muted);">
+                    Uncheck to send GA4 beacons <strong>direct</strong> and keep the proxy for Custom Proxy URLs only — cuts almost all proxy bandwidth, but GA4 then reports your <strong>real</strong> IP location.
+                </small>
+
                 <div style="margin-top: 6px; font-size: 11px; color: var(--text-muted);">
                     <strong>Proxied:</strong> /g/collect, /j/collect (tiny beacons ~2KB) — <strong>Direct:</strong> gtag.js, gtm.js, page, images, everything else
                 </div>
@@ -1614,6 +1622,7 @@ googleads.g.doubleclick.net"
                 inputCommands: document.getElementById('inputCommands').value,
                 // Proxy settings
                 proxyEnabled: document.getElementById('proxyEnabled').checked,
+                proxyCollectEnabled: document.getElementById('proxyCollectEnabled').checked,
                 proxyUrl: document.getElementById('proxyUrl').value,
                 // Custom proxy URL patterns (CM360 / ad trackers) — paste click URL directly into Campaign URL field
                 customProxyEnabled: document.getElementById('customProxyEnabled').checked,
@@ -1687,6 +1696,9 @@ googleads.g.doubleclick.net"
             if (config.adsBlock !== undefined) document.getElementById('adsBlock').checked = config.adsBlock;
             if (config.inputCommands) document.getElementById('inputCommands').value = config.inputCommands;
             // Proxy settings
+            if (config.proxyCollectEnabled !== undefined) {
+                document.getElementById('proxyCollectEnabled').checked = config.proxyCollectEnabled;
+            }
             if (config.proxyEnabled !== undefined) {
                 document.getElementById('proxyEnabled').checked = config.proxyEnabled;
                 toggleProxySettings();
@@ -1762,7 +1774,16 @@ googleads.g.doubleclick.net"
         function toggleProxySettings() {
             const enabled = document.getElementById('proxyEnabled').checked;
             document.getElementById('proxyUrl').disabled = !enabled;
+            document.getElementById('proxyCollectEnabled').disabled = !enabled;
             if (enabled) addLog('info', 'Proxy enabled');
+        }
+
+        // Toggle whether GA4 /collect beacons go through the proxy
+        function toggleProxyCollect() {
+            const enabled = document.getElementById('proxyCollectEnabled').checked;
+            addLog(enabled ? 'info' : 'warning', enabled
+                ? 'GA4 /collect beacons will route through the proxy — GA4 location follows the proxy IP'
+                : 'GA4 /collect beacons will go DIRECT — bandwidth drops, but GA4 location follows your real IP');
         }
 
         // Toggle custom proxy URL pattern fields
@@ -1982,7 +2003,9 @@ googleads.g.doubleclick.net"
             
             // Log proxy status
             if (config.proxyEnabled && config.proxyUrl) {
-                addLog('info', `Proxy ENABLED: Only GA requests will use proxy`);
+                addLog('info', config.proxyCollectEnabled
+                    ? `Proxy ENABLED: GA4 /collect beacons + matching custom URLs use proxy`
+                    : `Proxy ENABLED: custom URL patterns only — GA4 /collect goes DIRECT (real IP decides GA4 location)`);
                 addLog('info', `Proxy URL: ${config.proxyUrl.replace(/:[^:]*@/, ':***@')}`); // Hide password
             }
             if (config.customProxyEnabled && config.customProxyPatterns?.trim()) {
@@ -2143,6 +2166,7 @@ googleads.g.doubleclick.net"
             document.getElementById('inputCommands').value = '';
             // Proxy settings reset
             document.getElementById('proxyEnabled').checked = false;
+            document.getElementById('proxyCollectEnabled').checked = true;
             document.getElementById('proxyUrl').value = '';
             // Custom proxy URLs reset
             document.getElementById('customProxyEnabled').checked = false;

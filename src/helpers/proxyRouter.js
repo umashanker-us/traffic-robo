@@ -187,11 +187,17 @@ class ProxyRouter {
             }
         }
         
+        // Only affects the log line below — routing decisions live in the
+        // visitors' route handlers.
+        this.collectEnabled = options.collectEnabled !== false;
+
         this.stats = { totalRequests: 0, proxiedRequests: 0, directRequests: 0, scriptsLoadedDirect: 0 };
         
         if (this.enabled && this.proxyConfig) {
             this.logger.info(`Proxy: ${this.proxyConfig.host}:${this.proxyConfig.port}`);
-            this.logger.info(`Only /collect endpoints proxied (scripts + page DIRECT)`);
+            this.logger.info(this.collectEnabled
+                ? `Only /collect endpoints proxied (scripts + page DIRECT)`
+                : `/collect proxying OFF — custom URL patterns only (scripts, page and beacons DIRECT)`);
         }
     }
     
