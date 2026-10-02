@@ -15,6 +15,23 @@ const { getUserAgentList, getMatchingScreenSize, getMixedScreenSizes,
         setRuntimeChromeVersion, isInconsistentDeviceType } = require('../helpers/userAgents');
 const { resolveBrowser } = require('../helpers/browserResolver');
 const { probeLanding } = require('../helpers/landingProbe');
+const { buildUserAgentMetadata, buildClientHintHeaders } = require('../helpers/clientHints');
+
+/**
+ * Headers the landing probe should identify itself with — the same shape
+ * BrowserSession._buildRequestIdentity() produces for a visit, built here
+ * because the probe runs before any visitor exists.
+ */
+function buildProbeIdentity(userAgent, location) {
+    const coords = Constants.getLocationCoords(location) || {};
+    const { metadata } = buildUserAgentMetadata(userAgent);
+    return {
+        userAgent,
+        // The same value the browser context will send for these visits.
+        acceptLanguage: coords.locale || 'en-US',
+        clientHints: buildClientHintHeaders(metadata),
+    };
+}
 const AutomaticVisitor = require('./automaticVisitor');
 const ManualVisitor = require('./manualVisitor');
 const { SessionReplayStore } = require('../helpers/sessionReplay');
@@ -170,9 +187,14 @@ class VisitLogic {
         // Resolve what each campaign URL lands on, once, before any visit runs.
         // A URL that ends on a file cannot produce a GA4 session, and attempting
         // the navigation costs a full timeout per visit for nothing.
+        // The probe is one real request to the site per campaign URL, so it is
+        // logged like any visit. It identifies itself the same way a visit
+        // would rather than as an unknown agent.
+        const probeIdentity = buildProbeIdentity(userAgentList[0], location);
+
         this.landingProbes = new Map();
         for (const url of urlList) {
-            const probe = await probeLanding(url, { userAgent: userAgentList[0] });
+            const probe = await probeLanding(url, probeIdentity);
             this.landingProbes.set(url, probe);
             if (probe.isFile) {
                 logger.warn(`${url} lands on a file (${probe.contentType}) after ${probe.hops} redirect(s) — no GA4 session is possible. Tracker hops still fire; use an HTML landing page for GA4 traffic.`);

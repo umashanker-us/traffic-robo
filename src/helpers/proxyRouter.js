@@ -94,6 +94,14 @@ function parseCustomProxyPatterns(raw) {
  * chain is checked independently, so a multi-step redirect with all hops
  * matching the patterns gets every hop proxied.
  */
+// If a caller ever forgets to pass an identity, a hop must still look like a
+// browser. A bare "Mozilla/5.0" has no device token and no browser token, so a
+// server-side log reads it as Device: Desktop, Browser: Mozilla — the exact
+// row that made a whole click report look wrong. Using a complete UA means the
+// worst case is one slightly stale Chrome, not an unidentifiable agent, and the
+// warning below makes it visible instead of silent.
+const FALLBACK_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.8037.59 Safari/537.36';
+
 // Extensions that are never a tracker hop and can be large. Images, .js and
 // .css stay matchable: a 1x1 impression pixel is often a .gif or .png and does
 // need the proxy IP for attribution, and those are all small.
@@ -342,6 +350,9 @@ class ProxyRouter {
  * Returns: { finalUrl, hops: [{ url, status, viaProxy }] }
  */
 async function resolveTrackerChain(startUrl, proxyConfig, patterns, logger = null, maxHops = 10, identity = {}) {
+    if (logger && !identity.userAgent) {
+        logger.warn('Tracker chain has no visit identity — hops will use a fallback user agent, so a click log will not match the visit');
+    }
     const hops = [];
     let currentUrl = startUrl;
     const proxyAuth = (proxyConfig && proxyConfig.username && proxyConfig.password)
@@ -370,14 +381,25 @@ async function resolveTrackerChain(startUrl, proxyConfig, patterns, logger = nul
                 // Device: Desktop, Browser: Mozilla for every click, whatever
                 // the visit's real user agent was. Each hop now carries the
                 // identity of the visit it belongs to.
+                // A browser document navigation also carries the Sec-Fetch
+                // metadata set and Accept-Encoding. Their absence on a document
+                // request is one of the cheapest bot checks there is, so a hop
+                // without them stands out however good its user agent is.
+                // The first hop is user-initiated; the ones after it are
+                // redirects, which a browser reports as cross-site without the
+                // user flag.
+                const firstHop = i === 0;
                 const headers = Object.assign({
                     'Host': targetUrl.host,
-                    'User-Agent': identity.userAgent || 'Mozilla/5.0',
-                    // What a browser sends for a document navigation.
+                    'User-Agent': identity.userAgent || FALLBACK_USER_AGENT,
                     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
                     'Accept-Language': identity.acceptLanguage || 'en-US,en;q=0.9',
+                    'Accept-Encoding': 'gzip, deflate, br',
                     'Upgrade-Insecure-Requests': '1',
-                }, identity.clientHints || {});
+                    'Sec-Fetch-Dest': 'document',
+                    'Sec-Fetch-Mode': 'navigate',
+                    'Sec-Fetch-Site': firstHop ? 'none' : 'cross-site',
+                }, firstHop ? { 'Sec-Fetch-User': '?1' } : {}, identity.clientHints || {});
                 if (proxyAuth) headers['Proxy-Authorization'] = `Basic ${proxyAuth}`;
 
                 const req = http.request({
@@ -435,6 +457,7 @@ module.exports = {
     parseCustomProxyPatterns,
     matchesCustomProxyPattern,
     isFileDownloadUrl,
+    FALLBACK_USER_AGENT,
     NEVER_PROXY_EXTENSIONS,
     resolveTrackerChain,
     GA_COLLECT_DOMAINS,

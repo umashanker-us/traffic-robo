@@ -11,7 +11,7 @@
  */
 
 const http = require('http');
-const { resolveTrackerChain, parseProxyString } = require('../src/helpers/proxyRouter');
+const { resolveTrackerChain, parseProxyString, FALLBACK_USER_AGENT } = require('../src/helpers/proxyRouter');
 const AutomaticVisitor = require('../src/core/automaticVisitor');
 const ManualVisitor = require('../src/core/manualVisitor');
 
@@ -55,11 +55,14 @@ function identityFor(userAgent) {
 }
 
 describe('_buildRequestIdentity', () => {
-    test('reports the visit user agent, a language list and matching hints', () => {
+    test('reports the visit user agent, its locale and matching hints', () => {
         const id = identityFor(ANDROID_UA);
         expect(id.userAgent).toBe(ANDROID_UA);
-        expect(id.acceptLanguage).toMatch(/^[a-z]{2}(-[A-Z]{2})?/);
-        expect(id.acceptLanguage).toContain('q=');
+        // Exactly what the browser context sends, so a tracker correlating the
+        // click with the landing visit sees one value and not two. Playwright
+        // derives Accept-Language from `locale`, which is a bare tag.
+        expect(id.acceptLanguage).toBe('en-IN');
+        expect(id.acceptLanguage).not.toContain('q=');
         expect(id.clientHints['sec-ch-ua-mobile']).toBe('?1');
         expect(id.clientHints['sec-ch-ua-platform']).toBe('"Android"');
         expect(id.clientHints['sec-ch-ua']).toContain('Google Chrome');
@@ -131,10 +134,16 @@ describe('resolveTrackerChain sends the identity it is given', () => {
         expect(/Google Chrome|Microsoft Edge|Opera|Samsung Internet/.test(brands)).toBe(true);
     });
 
-    test('no identity still works, falling back to the old placeholder', async () => {
+    // A missing identity must never degrade to an unidentifiable agent: that is
+    // what produced the Desktop / Mozilla rows in the first place.
+    test('no identity falls back to a complete user agent, not a bare token', async () => {
         await walk(undefined);
         expect(seen).toHaveLength(1);
-        expect(seen[0]['user-agent']).toBe('Mozilla/5.0');
+        const ua = seen[0]['user-agent'];
+        expect(ua).toBe(FALLBACK_USER_AGENT);
+        expect(ua).not.toBe('Mozilla/5.0');
+        expect(ua).toMatch(/Chrome\/\d+\./);
+        expect(ua).toContain('Windows NT');
     });
 
     test('the Host header still names the hop target, not the proxy', async () => {

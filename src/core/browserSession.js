@@ -212,16 +212,24 @@ class BrowserSession {
      * @returns {{userAgent: string, acceptLanguage: string, clientHints: Object}}
      */
     _buildRequestIdentity() {
-        const languages = Constants.getLanguagesForLocation(this.location) || [];
-        const acceptLanguage = languages.length
-            ? languages.map((lang, i) => (i === 0 ? lang : `${lang};q=${(1 - i * 0.1).toFixed(1)}`)).join(',')
-            : 'en-US,en;q=0.9';
         const metadata = this._uaMetadata || buildUserAgentMetadata(this.userAgent).metadata;
         return {
             userAgent: this.userAgent,
-            acceptLanguage,
+            acceptLanguage: this._buildAcceptLanguage(),
             clientHints: buildClientHintHeaders(metadata),
         };
+    }
+
+    /**
+     * A weighted Accept-Language list for the campaign location, the way a real
+     * browser sends it. Used for both the browser context and the Node-side
+     * requests so the two cannot disagree.
+     */
+    _buildAcceptLanguage() {
+        // Exactly what the browser context sends, so a tracker correlating the
+        // click hop with the landing visit sees one value, not two. Playwright
+        // derives this header from `locale` alone.
+        return (this.locationData && this.locationData.locale) || 'en-US';
     }
 
     /**
@@ -386,6 +394,17 @@ class BrowserSession {
         // merged route handler rebuilds request headers from Playwright's
         // network layer, which would otherwise re-expose Chromium's own brands.
         contextOptions.extraHTTPHeaders = buildClientHintHeaders(uaMetadata);
+        // Playwright derives Accept-Language from `locale` as a bare tag
+        // ("en-IN"). A real Chrome sends a weighted list, and the proxied
+        // tracker hops send one too — a tracker comparing the click to the
+        // landing visit would otherwise see two different values.
+        // Accept-Language is deliberately NOT set here: Playwright's `locale`
+        // option wins over extraHTTPHeaders for that header, and forcing a
+        // weighted list through CDP corrupts navigator.languages (it ends up
+        // containing the q-values, which a real browser never does). The
+        // context's locale is the single source of truth, and the Node-side
+        // requests mirror it — see _buildAcceptLanguage.
+
 
         if (this.isReferer && this.referer) {
             contextOptions.extraHTTPHeaders['Referer'] = this.referer;
@@ -627,7 +646,76 @@ class BrowserSession {
         }
         return this._downloadLanding;
     }
+    /**
+     * Does this visit need request interception at all?
+     *
+     * Measured: with context.route() active, Chrome adds `pragma: no-cache` and
+     * `cache-control: no-cache` to every navigation — 14 headers become 16. A
+     * normal navigation sends neither; they are what a hard reload looks like,
+     * so every visit carried a forced-reload signature on every page. Neither
+     * route.continue({headers}) nor CDP Network.setCacheDisabled(false) can
+     * remove them, so the only fix is not to intercept when nothing needs it.
+     *
+     * GA4 monitoring does not need it — passive request listeners see the same
+     * beacons. These four do:
+     *
+     * @returns {string[]} the reasons, empty when interception can be skipped
+     */
+    _interceptionReasons() {
+        const reasons = [];
+        if (this.proxyEnabled && this.proxyCollectEnabled) reasons.push('proxying /collect');
+        if (this.proxyEnabled && this.customProxyEnabled && this.customProxyPatterns.length > 0) {
+            reasons.push('proxying custom URL patterns');
+        }
+        if (this.adsBlock) reasons.push('ad blocking');
+        if (this.fastMode && (this.blockImages || this.blockMedia || this.blockFonts
+            || this.blockStyles || this.blockScripts)) {
+            reasons.push('fast-mode resource blocking');
+        }
+        // The returning-user fix rewrites the /collect URL, which can only be
+        // done by intercepting it.
+        if (this.isOldUser) reasons.push('returning-user /collect patch');
+        return reasons;
+    }
+
+    /**
+     * Watch GA4 beacons without intercepting anything.
+     *
+     * Same replay entries and same live-monitor events as the route handler
+     * produces, minus the forced-reload headers interception adds.
+     */
+    async _setupPassiveMonitor() {
+        const self = this;
+        this.context.on('request', (request) => {
+            try {
+                const url = request.url();
+                const urlLower = url.toLowerCase();
+                if (isGACollectRequest(url)) {
+                    if (self.replay) self.replay.logRequest(url, true, false);
+                    self._emitGA4Event(url, false);
+                    return;
+                }
+                if (isGAScript(url)) {
+                    if (self.replay) self.replay.logRequest(url, true, false);
+                    return;
+                }
+                if (debugAllTracking && isTrackingRequest(urlLower) && self.replay) {
+                    self.replay.logRequest(url, false, false);
+                }
+            } catch (err) {
+                self.logger.debug(`Passive monitor error (ignored): ${err.message}`);
+            }
+        });
+        this.logger.info('Request monitoring: passive (no interception — navigations stay cache-normal)');
+    }
+
     async _setupMergedRouteHandler() {
+        const reasons = this._interceptionReasons();
+        if (reasons.length === 0) {
+            await this._setupPassiveMonitor();
+            return;
+        }
+
         // Initialize proxy router
         if (this.proxyEnabled && this.proxyConfig) {
             this.proxyRouter = new ProxyRouter({
@@ -772,11 +860,7 @@ class BrowserSession {
           }
         });
 
-        const features = [];
-        if (this.proxyEnabled) features.push('proxy-collect-only');
-        if (this.adsBlock) features.push('ad-block');
-        if (this.fastMode) features.push('fast-mode');
-        this.logger.info(`Route handler: ${features.join(' + ')}`);
+        this.logger.info(`Request interception: ${reasons.join(' + ')}`);
     }
     /**
      * FIXED: Merged route handler for proxy routing + ad blocking
