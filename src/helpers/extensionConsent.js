@@ -75,81 +75,114 @@ function findExtensionId(context) {
 /**
  * Open the extension's options page and grant consent.
  *
+ * The click has to be retried. The options page renders its controls from
+ * extension storage asynchronously, so a click that lands before that render
+ * completes is overwritten by it — measured as 8 failures in 25 concurrent
+ * visits, all reporting "the consent control did not stay checked". Waiting for
+ * the control, then verifying and retrying, is what makes it stick.
+ *
  * @param {import('playwright').BrowserContext} context
  * @param {Object} options
  * @param {string} options.profileDir - where the marker is written
  * @param {Object} [options.logger]
- * @param {number} [options.settleMs=2500] - time for the extension to persist it
- * @returns {Promise<{granted: boolean, alreadyGranted: boolean, reason: string|null, extensionId: string|null}>}
+ * @param {number} [options.attempts=3]
+ * @param {number} [options.settleMs=1200] - per-attempt wait for the page to persist it
+ * @param {number} [options.workerTimeoutMs=10000] - wait for the extension to start
+ * @returns {Promise<{granted: boolean, alreadyGranted: boolean, reason: string|null, extensionId: string|null, attempts: number}>}
  */
-async function grantExtensionConsent(context, { profileDir, logger = null, settleMs = 2500 } = {}) {
+async function grantExtensionConsent(context, {
+    profileDir,
+    logger = null,
+    attempts = 3,
+    settleMs = 1200,
+    workerTimeoutMs = 10000,
+} = {}) {
     const log = (level, msg) => { if (logger && logger[level]) logger[level](msg); };
 
     if (hasConsent(profileDir)) {
-        return { granted: true, alreadyGranted: true, reason: null, extensionId: findExtensionId(context) };
+        return { granted: true, alreadyGranted: true, reason: null, extensionId: findExtensionId(context), attempts: 0 };
     }
 
-    const extensionId = findExtensionId(context);
+    // The extension's service worker starts a moment after the browser does, and
+    // its id can only be read from there. Under concurrency it is routinely not
+    // up yet when the first visit asks.
+    let extensionId = findExtensionId(context);
     if (!extensionId) {
-        return { granted: false, alreadyGranted: false, reason: 'no extension service worker found', extensionId: null };
+        try {
+            await context.waitForEvent('serviceworker', { timeout: workerTimeoutMs });
+        } catch {
+            // fall through to the check below
+        }
+        extensionId = findExtensionId(context);
+    }
+    if (!extensionId) {
+        return { granted: false, alreadyGranted: false, reason: 'the extension service worker never started', extensionId: null, attempts: 0 };
     }
 
     let page = null;
+    let used = 0;
     try {
         page = await context.newPage();
         await page.goto(`chrome-extension://${extensionId}/options/options.html`, {
-            waitUntil: 'domcontentloaded',
+            waitUntil: 'load',
             timeout: 20000,
         });
 
-        const result = await page.evaluate((selectors) => {
-            const out = { found: null, wasChecked: null, nowChecked: null };
-            for (const selector of selectors) {
-                const box = document.querySelector(selector);
-                if (!box) continue;
-                out.found = selector;
-                out.wasChecked = box.checked;
-                if (!box.checked) box.click();          // the control's own handler persists it
-                out.nowChecked = box.checked;
-                break;
-            }
-            return out;
-        }, CONSENT_SELECTORS);
+        // Wait for the control to exist at all before touching it.
+        const selector = await Promise.race(
+            CONSENT_SELECTORS.map(sel =>
+                page.waitForSelector(sel, { timeout: 8000, state: 'attached' }).then(() => sel)),
+        ).catch(() => null);
 
-        if (!result.found) {
+        if (!selector) {
             return {
                 granted: false,
                 alreadyGranted: false,
                 reason: 'no consent control on the options page (an older extension build?)',
                 extensionId,
+                attempts: 0,
             };
         }
 
-        // The extension writes the setting asynchronously; give it a moment
-        // before the page closes under it.
+        const read = () => page.evaluate(
+            (sel) => !!(document.querySelector(sel) || {}).checked, selector);
+
+        // Let the page finish applying stored settings, or the render undoes us.
         await page.waitForTimeout(settleMs);
+        const wasChecked = await read();
 
-        const confirmed = await page.evaluate(
-            (selector) => !!(document.querySelector(selector) || {}).checked,
-            result.found,
-        );
-
-        if (!confirmed) {
-            return { granted: false, alreadyGranted: false, reason: 'the consent control did not stay checked', extensionId };
+        if (wasChecked) {
+            markConsent(profileDir, { extensionId, control: selector, wasChecked: true });
+            log('info', `Extension consent was already set in this profile (${selector})`);
+            return { granted: true, alreadyGranted: true, reason: null, extensionId, attempts: 0 };
         }
 
-        markConsent(profileDir, { extensionId, control: result.found, wasChecked: result.wasChecked });
-        log('info', result.wasChecked
-            ? `Extension consent was already set in this profile (${result.found})`
-            : `Extension consent granted in this profile (${result.found}) — it reports nothing without this`);
+        for (used = 1; used <= attempts; used++) {
+            await page.click(selector, { timeout: 5000 }).catch(async () => {
+                await page.evaluate((sel) => document.querySelector(sel).click(), selector);
+            });
+            await page.waitForTimeout(settleMs);
+            if (await read()) {
+                markConsent(profileDir, { extensionId, control: selector, attempts: used });
+                log('info', `Extension consent granted in this profile (${selector}, attempt ${used}) — it reports nothing without this`);
+                return { granted: true, alreadyGranted: false, reason: null, extensionId, attempts: used };
+            }
+        }
 
-        return { granted: true, alreadyGranted: !!result.wasChecked, reason: null, extensionId };
+        return {
+            granted: false,
+            alreadyGranted: false,
+            reason: `the consent control did not stay checked after ${attempts} attempts`,
+            extensionId,
+            attempts,
+        };
     } catch (error) {
         return {
             granted: false,
             alreadyGranted: false,
             reason: error.message.split('\n')[0],
             extensionId,
+            attempts: used,
         };
     } finally {
         if (page) await page.close().catch(() => {});

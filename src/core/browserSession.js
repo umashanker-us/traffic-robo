@@ -473,18 +473,34 @@ class BrowserSession {
                 await this._resetGACookies();
             }
 
-            // Auto-close the extension's own tabs (welcome/onboarding) as they
-            // appear — except while consent is being granted, which happens on
-            // the extension's options page. Closing that was part of why the
-            // extension never reported anything.
-            const isExtPage = (url) =>
-                url.startsWith('chrome-extension://') ||
-                url.includes('similarweb.com/corp/extension-welcome');
+            // Auto-close the extension's own tabs as they appear — except while
+            // consent is being granted, which happens on the extension's options
+            // page. Closing that was part of why the extension never reported.
+            //
+            // chrome-error:// is in the list because of what the extension does
+            // right after consent: it opens www.similarweb.com, which on some
+            // networks is DNS-blocked (it resolves to an ISP address that never
+            // answers on 443) and lands on an error page that then sits there.
+            // Every other SimilarWeb host used for reporting still works, so the
+            // tab is cosmetic — but it should not linger.
+            const isExtensionOwnPage = (url) => {
+                if (!url) return false;
+                if (url.startsWith('chrome-extension://')) return true;
+                if (url.startsWith('chrome-error://')) return true;
+                try {
+                    return /(^|\.)similarweb\.com$|(^|\.)similargroup\.com$/.test(new URL(url).hostname);
+                } catch {
+                    return false;
+                }
+            };
+
             this.context.on('page', async (page) => {
                 try {
                     await page.waitForLoadState('commit').catch(() => {});
                     if (this._grantingConsent) return;
-                    if (isExtPage(page.url())) {
+                    // Never the campaign page, whatever it ended up showing.
+                    if (page === this.page) return;
+                    if (isExtensionOwnPage(page.url())) {
                         await page.close().catch(() => {});
                     }
                 } catch {}

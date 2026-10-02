@@ -35,24 +35,52 @@ let dir;
 beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'consent-test-')); });
 afterEach(() => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch {} });
 
-/** A context whose options page behaves like the real one. */
-function fakeContext({ hasWorker = true, control = '#autoIcon', startsChecked = false, navThrows = null } = {}) {
-    const state = { checked: startsChecked, closed: false, visited: null };
+/**
+ * A context whose options page behaves like the real one.
+ *
+ * `revertClicks` reproduces the race that made this retry: the page's own async
+ * render from extension storage undoes a click that lands too early.
+ */
+function fakeContext({
+    hasWorker = true,
+    control = '#autoIcon',
+    startsChecked = false,
+    navThrows = null,
+    revertClicks = 0,
+} = {}) {
+    const state = { checked: startsChecked, closed: false, visited: null, clicks: 0, reverted: 0 };
+
     const page = {
         goto: async (url) => { state.visited = url; if (navThrows) throw new Error(navThrows); },
+        waitForSelector: async (sel) => {
+            if (sel !== control) throw new Error(`no element matching ${sel}`);
+            return {};
+        },
+        click: async (sel) => {
+            if (sel !== control) throw new Error(`no element matching ${sel}`);
+            state.clicks += 1;
+            state.checked = true;
+            if (state.reverted < revertClicks) {
+                state.reverted += 1;
+                state.checked = false;          // the render overwrote it
+            }
+        },
         evaluate: async (fn, arg) => fn.call(null, arg),
         waitForTimeout: async () => undefined,
         close: async () => { state.closed = true; },
     };
+
     // The page's evaluate runs against this stand-in DOM.
     global.document = {
         querySelector: (sel) => (sel === control
-            ? { get checked() { return state.checked; }, click() { state.checked = !state.checked; } }
+            ? { get checked() { return state.checked; }, click() { state.checked = true; } }
             : null),
     };
+
     return {
         state,
         serviceWorkers: () => (hasWorker ? [{ url: () => `chrome-extension://${EXT_ID}/background/background.js` }] : []),
+        waitForEvent: async () => { throw new Error('no service worker appeared'); },
         newPage: async () => page,
     };
 }
@@ -129,7 +157,7 @@ describe('grantExtensionConsent', () => {
     test('no service worker means no consent, and it says why', async () => {
         const result = await grantExtensionConsent(fakeContext({ hasWorker: false }), { profileDir: dir });
         expect(result.granted).toBe(false);
-        expect(result.reason).toMatch(/service worker/i);
+        expect(result.reason).toMatch(/service worker never started/i);
         expect(hasConsent(dir)).toBe(false);
     });
 
@@ -139,6 +167,40 @@ describe('grantExtensionConsent', () => {
         expect(result.granted).toBe(false);
         expect(result.reason).toMatch(/consent control/i);
         expect(hasConsent(dir)).toBe(false);
+    });
+
+    // The failure that showed up under concurrency: the options page renders its
+    // controls from storage asynchronously and overwrote an early click. 8 of 25
+    // visits reported "the consent control did not stay checked".
+    test('a click the page reverts is retried until it sticks', async () => {
+        const ctx = fakeContext({ revertClicks: 2 });
+        const result = await grantExtensionConsent(ctx, { profileDir: dir, attempts: 3 });
+
+        expect(result.granted).toBe(true);
+        expect(result.attempts).toBe(3);
+        expect(ctx.state.checked).toBe(true);
+        expect(hasConsent(dir)).toBe(true);
+    });
+
+    test('a page that always reverts is reported, not silently assumed granted', async () => {
+        const ctx = fakeContext({ revertClicks: 99 });
+        const result = await grantExtensionConsent(ctx, { profileDir: dir, attempts: 2 });
+
+        expect(result.granted).toBe(false);
+        expect(result.reason).toMatch(/did not stay checked after 2 attempts/);
+        expect(hasConsent(dir)).toBe(false);
+    });
+
+    // Under concurrency the worker is routinely not up when the first visit asks.
+    test('it waits for the extension to start before giving up', async () => {
+        let asked = false;
+        const ctx = fakeContext({ hasWorker: false });
+        ctx.waitForEvent = async () => { asked = true; throw new Error('timeout'); };
+
+        const result = await grantExtensionConsent(ctx, { profileDir: dir, workerTimeoutMs: 10 });
+        expect(asked).toBe(true);
+        expect(result.granted).toBe(false);
+        expect(result.reason).toMatch(/service worker never started/);
     });
 
     test('a navigation failure is reported, not thrown', async () => {

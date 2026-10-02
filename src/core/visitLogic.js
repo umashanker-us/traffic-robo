@@ -185,7 +185,7 @@ class VisitLogic {
             // running — the campaign silently serialises.
             const pool = parseInt(extensionProfilePool) || 0;
             if (pool === 0) {
-                logger.warn('Extension profile pool is 0: every visit gets a throwaway profile, so the extension is reinstalled each time and accumulates nothing. A panel like SimilarWeb will report no data. Set the pool to your thread count.');
+                logger.warn('Extension profile pool is 0: every visit gets a throwaway profile. The extension is reinstalled each visit, accumulates nothing, and its consent cannot persist — so the options page has to be reopened on EVERY visit to grant it again, which you will see flash past. Set the pool to your thread count and it happens once per profile.');
             } else if (pool < threads) {
                 logger.warn(`Extension profile pool (${pool}) is smaller than the thread count (${threads}): ${threads - pool} visit(s) will wait for a free profile at any moment, so the campaign runs slower than configured. Set the pool to at least ${threads}.`);
             }
