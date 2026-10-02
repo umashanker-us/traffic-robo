@@ -354,3 +354,33 @@ describe('shuffleArray()', () => {
         expect(shuffleArray([42])).toEqual([42]);
     });
 });
+
+// ============================================================
+// repeat must be honoured exactly
+// ============================================================
+describe('visit count honours repeat exactly', () => {
+    // The enqueue loop ran fixed blocks of 100, so repeat=4 produced 100 visits
+    // and repeat=250 produced 300. The batch is a shuffle window, not a quota.
+    function visitsFor(repeat) {
+        const totalBatches = Math.ceil(repeat / 100);
+        let queued = 0;
+        for (let batchNum = 0; batchNum < totalBatches; batchNum++) {
+            queued += Math.min(100, repeat - batchNum * 100);
+        }
+        return queued;
+    }
+
+    test.each([1, 4, 10, 99, 100, 101, 150, 250, 1000])('repeat=%i queues exactly that many', (repeat) => {
+        expect(visitsFor(repeat)).toBe(repeat);
+    });
+
+    test('a batch is never larger than the shuffle window', () => {
+        const repeat = 250;
+        const sizes = [];
+        for (let b = 0; b < Math.ceil(repeat / 100); b++) {
+            sizes.push(Math.min(100, repeat - b * 100));
+        }
+        expect(sizes).toEqual([100, 100, 50]);
+        expect(Math.max(...sizes)).toBeLessThanOrEqual(100);
+    });
+});

@@ -226,8 +226,8 @@ class VisitLogic {
         
         // Calculate total batches needed
         const totalBatches = Math.ceil(repeat / 100);
-        logger.info(`Total visits to process: ${repeat}`);
-        logger.info(`Batches: ${totalBatches} (100 visits each)`);
+        logger.info(`Total visits to process: ${repeat} per URL (${repeat * urlList.length} total)`);
+        logger.info(`Batches: ${totalBatches} (up to 100 visits each)`);
         logger.info(`Concurrent threads: ${threads}`);
 
         try {
@@ -237,6 +237,7 @@ class VisitLogic {
                     refererList,
                     isReferer,
                     totalBatches,
+                    repeat,
                     threads,
                     threadDelay,
                     memClear,
@@ -288,6 +289,7 @@ class VisitLogic {
                     refererList,
                     isReferer,
                     totalBatches,
+                    repeat,
                     threads,
                     threadDelay,
                     memClear,
@@ -373,7 +375,7 @@ class VisitLogic {
      */
     async _runAutomaticMode(config) {
         const {
-            urlList, refererList, isReferer, totalBatches, threads,
+            urlList, refererList, isReferer, totalBatches, repeat, threads,
             threadDelay, memClear, userAgentList, visitsList,
             csvVisitsByUrl, resolvedCsvRows,
             screenSizes, oldUserFlags, restrictToPrimaryDomain,
@@ -503,7 +505,14 @@ class VisitLogic {
                 const shuffledOldUser = shuffleArray(oldUserFlags);
                 const shuffledReferers = shuffleArray(refererList);
 
-                for (let i = 0; i < 100; i++) {
+                // The 100 here is the shuffle window, not a quota: the last
+                // batch must stop at `repeat` or the campaign overruns what
+                // was asked for (repeat=4 used to run 100 visits per URL).
+                // Falling back to a full batch keeps a caller that omits
+                // `repeat` from silently running zero visits.
+                const quota = Number.isFinite(repeat) ? repeat : totalBatches * 100;
+                const visitsInBatch = Math.min(100, quota - batchNum * 100);
+                for (let i = 0; i < visitsInBatch; i++) {
                     if (!this.isRunning) break;
 
                     for (const campaignUrl of urlList) {
@@ -673,7 +682,7 @@ class VisitLogic {
      */
     async _runManualMode(config) {
         const {
-            urlList, refererList, isReferer, totalBatches, threads,
+            urlList, refererList, isReferer, totalBatches, repeat, threads,
             threadDelay, memClear, userAgentList, screenSizes,
             visitsList, csvVisitsByUrl, resolvedCsvRows,
             oldUserFlags, restrictToPrimaryDomain, previousURL, useBaseUrlForOldUser,
@@ -803,7 +812,10 @@ class VisitLogic {
                 const shuffledReferers = shuffleArray(refererList);
                 const shuffledOldUser = shuffleArray(safeOldUserFlags);
 
-                for (let i = 0; i < 100; i++) {
+                // Same cap as automatic mode: the batch is a shuffle window.
+                const quota = Number.isFinite(repeat) ? repeat : totalBatches * 100;
+                const visitsInBatch = Math.min(100, quota - batchNum * 100);
+                for (let i = 0; i < visitsInBatch; i++) {
                     if (!this.isRunning) break;
 
                     for (const url of urlList) {
