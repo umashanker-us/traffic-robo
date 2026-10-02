@@ -39,6 +39,22 @@ function isChromiumUA(ua) {
 }
 
 /**
+ * Is this UA a phone rather than a tablet or desktop?
+ *
+ * Chrome on an Android tablet carries "Android" but no "Mobile" token and sends
+ * sec-ch-ua-mobile: ?0 — that pairing is what makes GA4 report a tablet. Testing
+ * for "Android" alone marked every tablet as a phone.
+ *
+ * @param {string} ua
+ * @returns {boolean}
+ */
+function isMobileUserAgent(ua) {
+    if (/iPad/.test(ua)) return false;
+    if (/Android/.test(ua) && !/Mobile/.test(ua)) return false;   // Android tablet
+    return /Mobile|Android|iPhone/.test(ua);
+}
+
+/**
  * Derive platform, platformVersion and model from the UA string.
  */
 function parsePlatform(ua) {
@@ -48,6 +64,7 @@ function parsePlatform(ua) {
             platform: 'Android',
             platformVersion: `${match[1]}.0.0`.split('.').slice(0, 3).join('.'),
             model: match[2].trim(),
+            // Tablets report no architecture either — they are not desktops.
             desktop: false,
         };
     }
@@ -97,10 +114,26 @@ function buildBrands(ua) {
     if (!chromeVersion) return null;
     const major = chromeVersion.split('.')[0];
 
+    // Each Chromium browser ships its own token in the UA and its own brand in
+    // sec-ch-ua. Reading the token is what keeps the two in agreement, and it
+    // is what lets GA4 report Edge, Opera and Samsung Internet as themselves
+    // instead of everything collapsing into one browser.
     const edgeVersion = (ua.match(/Edg\/([\d.]+)/) || [])[1];
-    const product = edgeVersion
-        ? { brand: 'Microsoft Edge', major: edgeVersion.split('.')[0], full: edgeVersion }
-        : { brand: 'Google Chrome', major, full: chromeVersion };
+    const operaVersion = (ua.match(/OPR\/([\d.]+)/) || [])[1];
+    const samsungVersion = (ua.match(/SamsungBrowser\/([\d.]+)/) || [])[1];
+
+    let product;
+    if (edgeVersion) {
+        product = { brand: 'Microsoft Edge', major: edgeVersion.split('.')[0], full: edgeVersion };
+    } else if (operaVersion) {
+        product = { brand: 'Opera', major: operaVersion.split('.')[0], full: operaVersion };
+    } else if (samsungVersion) {
+        // Samsung Internet reports a two-part version, e.g. 28.0
+        const sMajor = samsungVersion.split('.')[0];
+        product = { brand: 'Samsung Internet', major: sMajor, full: samsungVersion };
+    } else {
+        product = { brand: 'Google Chrome', major, full: chromeVersion };
+    }
 
     const grease = { brand: getRandomElement(GREASE_BRANDS), major: getRandomElement(GREASE_VERSIONS) };
 
@@ -129,7 +162,7 @@ function buildBrands(ua) {
  * @returns {{metadata: Object, isChromium: boolean}}
  */
 function buildUserAgentMetadata(userAgent) {
-    const mobile = /Mobile|Android|iPhone|iPad/.test(userAgent);
+    const mobile = isMobileUserAgent(userAgent);
     const platformInfo = parsePlatform(userAgent);
     const brandInfo = isChromiumUA(userAgent) ? buildBrands(userAgent) : null;
 
@@ -218,6 +251,7 @@ async function applyUserAgentOverride(context, page, { userAgent, acceptLanguage
 
 module.exports = {
     isChromiumUA,
+    isMobileUserAgent,
     buildUserAgentMetadata,
     buildClientHintHeaders,
     applyUserAgentOverride,

@@ -32,6 +32,7 @@ const {
 } = require('../helpers/clientHints');
 const { patchCollectUrlForReturning } = require('../helpers/collectPatch');
 const { acquireProfile } = require('../helpers/profilePool');
+const { getResolvedBrowser } = require('../helpers/browserResolver');
 
 // ===== Debug All Tracking Pixels Toggle =====
 // Module-level so the IPC handler can flip it for every in-flight visitor.
@@ -223,6 +224,20 @@ class BrowserSession {
      * Get bundled Chromium path when running as a packaged Electron app.
      * Returns undefined in dev mode so Playwright uses its own installed browser.
      */
+    /**
+     * Launch options for the browser binary the campaign resolved to.
+     * Real Chrome when it is installed (genuine navigator.plugins, mimeTypes
+     * and PDF viewer, which the bundled Chromium reports as 0/0/false), else
+     * the bundled Chromium so a machine without Chrome still works.
+     */
+    _getBrowserBinaryOptions() {
+        const resolved = getResolvedBrowser();
+        if (resolved && resolved.channel) return { channel: resolved.channel };
+        if (resolved && resolved.executablePath) return { executablePath: resolved.executablePath };
+        const bundled = this._getChromiumPath();
+        return bundled ? { executablePath: bundled } : {};
+    }
+
     _getChromiumPath() {
         // In packaged Electron apps, process.resourcesPath points to the resources dir
         const isPackaged = process.resourcesPath && !process.resourcesPath.includes('node_modules');
@@ -289,10 +304,7 @@ class BrowserSession {
             args: this._buildLaunchArgs()
         };
 
-        const chromiumPath = this._getChromiumPath();
-        if (chromiumPath) {
-            launchOptions.executablePath = chromiumPath;
-        }
+        Object.assign(launchOptions, this._getBrowserBinaryOptions());
 
         this.browser = await chromium.launch(launchOptions);
         this.logger.debug('Browser launched');
@@ -392,10 +404,7 @@ class BrowserSession {
                 headless: false,
                 args,
             };
-            const chromiumPath = this._getChromiumPath();
-            if (chromiumPath) {
-                persistentOptions.executablePath = chromiumPath;
-            }
+            Object.assign(persistentOptions, this._getBrowserBinaryOptions());
 
             this.context = await chromium.launchPersistentContext(this._tempUserDataDir, persistentOptions);
             this.browser = this.context.browser();
@@ -668,9 +677,98 @@ class BrowserSession {
 
         await this.context.addInitScript(({ langs, hideUAData }) => {
             Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-            Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
             Object.defineProperty(navigator, 'languages', { get: () => langs });
-            window.chrome = { runtime: {} };
+            if (!window.chrome) window.chrome = { runtime: {} };
+
+            // navigator.plugins used to be replaced with [1,2,3,4,5]. The length
+            // looked right and the contents did not: a real entry is a Plugin
+            // with a name, filename and description, so an array of integers is
+            // its own tell — and on real Chrome that fake overwrote five genuine
+            // entries with junk. Stand in only when the browser really has none
+            // (the bundled Chromium reports 0 plugins, 0 mimeTypes and
+            // pdfViewerEnabled false, which no real browser does), and then
+            // mirror exactly what Chrome ships: its PDF viewer set.
+            if (navigator.plugins.length === 0) {
+                try {
+                    const PDF = 'Portable Document Format';
+                    const FILE = 'internal-pdf-viewer';
+                    const PLUGIN_NAMES = [
+                        'PDF Viewer', 'Chrome PDF Viewer', 'Chromium PDF Viewer',
+                        'Microsoft Edge PDF Viewer', 'WebKit built-in PDF',
+                    ];
+                    const MIME_SPECS = [
+                        { type: 'application/pdf', suffixes: 'pdf' },
+                        { type: 'text/pdf', suffixes: 'pdf' },
+                    ];
+
+                    // Own value properties, defined rather than assigned: the
+                    // real prototypes expose name/type/suffixes as getter-only
+                    // accessors, so Object.assign over them throws.
+                    const define = (obj, props) => {
+                        for (const key of Object.keys(props)) {
+                            Object.defineProperty(obj, key, {
+                                value: props[key], enumerable: true, configurable: true,
+                            });
+                        }
+                        return obj;
+                    };
+
+                    const mimeList = MIME_SPECS.map(spec => define(
+                        Object.create(MimeType.prototype),
+                        { type: spec.type, suffixes: spec.suffixes, description: PDF },
+                    ));
+
+                    const pluginList = PLUGIN_NAMES.map(name => {
+                        const plugin = define(Object.create(Plugin.prototype), {
+                            name, filename: FILE, description: PDF, length: mimeList.length,
+                        });
+                        mimeList.forEach((mime, i) => {
+                            Object.defineProperty(plugin, i, { value: mime, enumerable: true, configurable: true });
+                        });
+                        define(plugin, {
+                            item: (i) => mimeList[i] || null,
+                            namedItem: (t) => mimeList.find(m => m.type === t) || null,
+                        });
+                        return plugin;
+                    });
+
+                    for (const mime of mimeList) {
+                        Object.defineProperty(mime, 'enabledPlugin', {
+                            value: pluginList[0], enumerable: true, configurable: true,
+                        });
+                    }
+
+                    const makeCollection = (proto, list, keyOf) => {
+                        const collection = Object.create(proto);
+                        list.forEach((item, i) => {
+                            Object.defineProperty(collection, i, { value: item, enumerable: true, configurable: true });
+                        });
+                        for (const item of list) {
+                            Object.defineProperty(collection, keyOf(item), {
+                                value: item, enumerable: false, configurable: true,
+                            });
+                        }
+                        define(collection, {
+                            length: list.length,
+                            item: (i) => list[i] || null,
+                            namedItem: (n) => list.find(x => keyOf(x) === n) || null,
+                            refresh: () => undefined,
+                        });
+                        return collection;
+                    };
+
+                    const plugins = makeCollection(PluginArray.prototype, pluginList, x => x.name);
+                    const mimeTypes = makeCollection(MimeTypeArray.prototype, mimeList, x => x.type);
+
+                    Object.defineProperty(navigator, 'plugins', { get: () => plugins, configurable: true });
+                    Object.defineProperty(navigator, 'mimeTypes', { get: () => mimeTypes, configurable: true });
+                    Object.defineProperty(navigator, 'pdfViewerEnabled', { get: () => true, configurable: true });
+                } catch (e) {
+                    // Leave the real (empty) values rather than a half-built fake:
+                    // a broken PluginArray is a louder signal than an empty one.
+                }
+            }
+
             if (hideUAData) {
                 try { delete Object.getPrototypeOf(navigator).userAgentData; } catch {}
                 try { Object.defineProperty(navigator, 'userAgentData', { get: () => undefined }); } catch {}

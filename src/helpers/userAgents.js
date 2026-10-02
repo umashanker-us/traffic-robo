@@ -23,6 +23,26 @@ const FIREFOX_VERSIONS = ['135.0', '134.0.2', '134.0', '133.0.3', '133.0'];
 // Safari versions - December 2025 (Safari 19 for iOS 26, Safari 18 for older)
 const SAFARI_VERSIONS = ['19.2', '19.1', '19.0', '18.2', '18.1'];
 
+// Opera versions - Chromium-based, ships its own OPR/ token and its own
+// "Opera" client-hint brand, so GA4 reports it as Opera and everything agrees.
+const OPERA_VERSIONS = ['129', '128', '127', '126'];
+
+// Samsung Internet - the default browser on Samsung Android devices, Chromium
+// based with its own SamsungBrowser/ token and "Samsung Internet" brand.
+const SAMSUNG_BROWSER_VERSIONS = ['28.0', '27.0', '26.0', '25.0'];
+
+// Android tablets. A tablet UA carries no "Mobile" token, which is exactly how
+// Chrome on an Android tablet presents itself, and it is what makes GA4 report
+// the device category as tablet rather than mobile.
+const ANDROID_TABLETS = [
+    { device: 'SM-X810', version: '15' },       // Galaxy Tab S10+
+    { device: 'SM-X710', version: '15' },       // Galaxy Tab S9
+    { device: 'SM-X216B', version: '15' },      // Galaxy Tab A9+
+    { device: 'Pixel Tablet', version: '16' },
+    { device: 'Lenovo TB375FC', version: '14' },// Tab P12
+    { device: 'Redmi Pad SE', version: '14' },
+];
+
 // Edge versions (same build as Chrome since Chromium-based) - December 2025
 const EDGE_VERSIONS = [
     { major: '143', build: '7499' },  // Dec 2025
@@ -104,11 +124,36 @@ function getRandomElement(arr) {
     return arr[Math.floor(Math.random() * arr.length)];
 }
 
+// When the real browser version is known, every generated UA claims it instead
+// of a hardcoded guess. Chromium 145 claiming to be 143 is a small lie; real
+// Chrome 154 claiming 143 is a large one, and feature detection does not lie —
+// a page can see APIs that the claimed version never shipped.
+let runtimeChromeVersion = null;
+
+/**
+ * Pin generated user agents to the browser that will actually run them.
+ * @param {string|null} version - full version, e.g. '154.0.8037.59'
+ */
+function setRuntimeChromeVersion(version) {
+    if (!version) { runtimeChromeVersion = null; return; }
+    const match = String(version).match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+    runtimeChromeVersion = match ? { major: match[1], build: match[3], full: String(version) } : null;
+}
+
+function getRuntimeChromeVersion() {
+    return runtimeChromeVersion;
+}
+
 /**
  * Generate realistic Chrome version string
  * Format: Major.0.Build.Patch (e.g., 143.0.7499.42)
  */
 function getChromeVersionString() {
+    if (runtimeChromeVersion) {
+        // Vary only the patch: the major and build must match the real engine.
+        const patch = Math.floor(Math.random() * 150) + 1;
+        return `${runtimeChromeVersion.major}.0.${runtimeChromeVersion.build}.${patch}`;
+    }
     const version = getRandomElement(CHROME_VERSIONS);
     // Patch numbers typically range from 0-200
     const patch = Math.floor(Math.random() * 150) + 1;
@@ -119,6 +164,10 @@ function getChromeVersionString() {
  * Generate realistic Edge version string
  */
 function getEdgeVersionString() {
+    if (runtimeChromeVersion) {
+        const patch = Math.floor(Math.random() * 150) + 1;
+        return `${runtimeChromeVersion.major}.0.${runtimeChromeVersion.build}.${patch}`;
+    }
     const version = getRandomElement(EDGE_VERSIONS);
     const patch = Math.floor(Math.random() * 150) + 1;
     return `${version.major}.0.${version.build}.${patch}`;
@@ -182,6 +231,45 @@ function generateEdgeUA() {
 }
 
 /**
+ * Generate an Opera user agent (desktop or Android).
+ * Opera is Chromium with its own OPR/ token and its own client-hint brand, so
+ * the UA string and the hints agree and GA4 reports a distinct browser.
+ */
+function generateOperaUA(platform = 'desktop') {
+    const chromeVersion = getChromeVersionString();
+    const opera = getRandomElement(OPERA_VERSIONS);
+    const operaVersion = `${opera}.0.${5900 + Math.floor(Math.random() * 400)}.${Math.floor(Math.random() * 90) + 10}`;
+
+    if (platform === 'mobile') {
+        const device = getRandomElement(ANDROID_DEVICES);
+        return `Mozilla/5.0 (Linux; Android ${device.version}; ${device.device}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVersion} Mobile Safari/537.36 OPR/${operaVersion}`;
+    }
+    const os = Math.random() > 0.3 ? getRandomElement(WINDOWS_VERSIONS) : getRandomElement(MAC_VERSIONS);
+    return `Mozilla/5.0 (${os}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVersion} Safari/537.36 OPR/${operaVersion}`;
+}
+
+/**
+ * Generate a Samsung Internet user agent (Android only, as it ships).
+ */
+function generateSamsungInternetUA() {
+    const device = getRandomElement(ANDROID_DEVICES);
+    const chromeVersion = getChromeVersionString();
+    const sb = getRandomElement(SAMSUNG_BROWSER_VERSIONS);
+    return `Mozilla/5.0 (Linux; Android ${device.version}; ${device.device}) AppleWebKit/537.36 (KHTML, like Gecko) SamsungBrowser/${sb} Chrome/${chromeVersion} Mobile Safari/537.36`;
+}
+
+/**
+ * Generate an Android tablet user agent.
+ * No "Mobile" token — that is how Chrome presents on an Android tablet, and it
+ * is what makes GA4 classify the device as tablet instead of mobile.
+ */
+function generateAndroidTabletUA() {
+    const tablet = getRandomElement(ANDROID_TABLETS);
+    const chromeVersion = getChromeVersionString();
+    return `Mozilla/5.0 (Linux; Android ${tablet.version}; ${tablet.device}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVersion} Safari/537.36`;
+}
+
+/**
  * Generate Android mobile user agent
  */
 function generateAndroidUA() {
@@ -215,6 +303,50 @@ function generateWindowsUA() {
 }
 
 /**
+ * Desktop, Chromium family only. Shares lean to the Indian desktop market:
+ * Chrome dominant, Edge second (it ships with Windows), Opera a long tail.
+ */
+function pickDesktopChromiumUA() {
+    const r = Math.random();
+    if (r < 0.80) return generateChromeUA('desktop');
+    if (r < 0.95) return generateEdgeUA();
+    return generateOperaUA('desktop');
+}
+
+/**
+ * Android, Chromium family only. Chrome dominant, Samsung Internet second
+ * (the default browser on every Samsung handset), Opera a long tail.
+ */
+function pickMobileChromiumUA() {
+    const r = Math.random();
+    if (r < 0.82) return generateAndroidUA();
+    if (r < 0.94) return generateSamsungInternetUA();
+    return generateOperaUA('mobile');
+}
+
+/**
+ * The mixed default: desktop, mobile and a slice of tablet.
+ */
+function pickMixedChromiumUA() {
+    const r = Math.random();
+    if (r < 0.58) return pickDesktopChromiumUA();
+    if (r < 0.94) return pickMobileChromiumUA();
+    return generateAndroidTabletUA();
+}
+
+/**
+ * Device types whose user agents cannot carry matching client hints, because
+ * Chromium always sends sec-ch-ua and a non-Chromium browser never does. They
+ * stay available as an explicit choice, with this flag so callers can warn.
+ * @param {string} userAgentType
+ * @returns {boolean}
+ */
+function isInconsistentDeviceType(userAgentType) {
+    return userAgentType === Constants.DEVICE_TYPES.FIREFOX
+        || userAgentType === Constants.DEVICE_TYPES.IPHONE;
+}
+
+/**
  * Get user agent list based on type
  * @param {string} userAgentType - Type from Constants.DEVICE_TYPES
  * @param {number} count - Number of user agents to generate
@@ -231,37 +363,30 @@ function getUserAgentList(userAgentType, count = 100) {
         switch (userAgentType) {
             case Constants.DEVICE_TYPES.DEFAULT:
             case Constants.DEVICE_TYPES.DESK_MOBILE:
-                // Mixed distribution: 60% desktop, 35% mobile, 5% tablet-like
-                const rand = Math.random();
-                if (rand < 0.60) {
-                    ua = Math.random() > 0.2 ? generateChromeUA('desktop') : 
-                         (Math.random() > 0.5 ? generateFirefoxUA('desktop') : generateSafariUA('desktop'));
-                } else if (rand < 0.95) {
-                    ua = Math.random() > 0.4 ? generateAndroidUA() : generateiPhoneUA();
-                } else {
-                    ua = generateChromeUA('desktop'); // Tablet uses desktop-like UA
-                }
+                // 58% desktop, 36% mobile, 6% tablet — and every entry is a
+                // Chromium browser, which is the whole point. Playwright drives
+                // Chromium, and Chromium always sends sec-ch-ua headers that
+                // cannot be suppressed. A Firefox or Safari UA therefore has to
+                // ship an empty brand list, which GA4 cannot resolve to a
+                // browser, so the browser dimension collapses to "Mozilla".
+                // Chrome, Edge, Opera and Samsung Internet each send their own
+                // real brand, so GA4 reports four distinct browsers and the UA
+                // string, the hints and the engine all agree.
+                ua = pickMixedChromiumUA();
                 break;
-                
+
             case Constants.DEVICE_TYPES.DESKTOP:
-                // Desktop only distribution
-                const desktopRand = Math.random();
-                if (desktopRand < 0.65) {
-                    ua = generateChromeUA('desktop');
-                } else if (desktopRand < 0.80) {
-                    ua = generateEdgeUA();
-                } else if (desktopRand < 0.90) {
-                    ua = generateSafariUA('desktop');
-                } else {
-                    ua = generateFirefoxUA('desktop');
-                }
+                ua = pickDesktopChromiumUA();
                 break;
-                
+
             case Constants.DEVICE_TYPES.MOBILE:
-                // Mobile only distribution
-                ua = Math.random() > 0.45 ? generateAndroidUA() : generateiPhoneUA();
+                ua = pickMobileChromiumUA();
                 break;
-                
+
+            case Constants.DEVICE_TYPES.TABLET:
+                ua = generateAndroidTabletUA();
+                break;
+
             case Constants.DEVICE_TYPES.CHROME:
                 ua = Math.random() > 0.3 ? generateChromeUA('desktop') : generateChromeUA('mobile');
                 break;
@@ -299,8 +424,14 @@ function getUserAgentList(userAgentType, count = 100) {
  * @returns {Object} Screen dimensions {width, height}
  */
 function getMatchingScreenSize(userAgent) {
-    const isMobile = userAgent.includes('Mobile') || userAgent.includes('Android') || userAgent.includes('iPhone');
-    const isTablet = userAgent.includes('iPad') || userAgent.includes('Tablet');
+    // Order matters: an Android tablet UA contains "Android" but no "Mobile"
+    // token, which is how Chrome presents on a tablet. Checking mobile first
+    // would hand it a phone-sized screen and GA4 would call it a phone.
+    const isTablet = userAgent.includes('iPad')
+        || userAgent.includes('Tablet')
+        || (userAgent.includes('Android') && !userAgent.includes('Mobile'));
+    const isMobile = !isTablet
+        && (userAgent.includes('Mobile') || userAgent.includes('Android') || userAgent.includes('iPhone'));
     
     if (isMobile) {
         return getRandomElement(Constants.MOBILE_SCREENS);
@@ -349,6 +480,15 @@ function getMobileScreens(count = 100) {
 
 module.exports = {
     getUserAgentList,
+    generateOperaUA,
+    generateSamsungInternetUA,
+    generateAndroidTabletUA,
+    pickDesktopChromiumUA,
+    pickMobileChromiumUA,
+    pickMixedChromiumUA,
+    isInconsistentDeviceType,
+    setRuntimeChromeVersion,
+    getRuntimeChromeVersion,
     getMatchingScreenSize,
     getMixedScreenSizes,
     getDesktopScreens,

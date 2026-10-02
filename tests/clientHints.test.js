@@ -139,7 +139,11 @@ describe('Agreement with every generated user agent', () => {
     test.each(deviceTypes)('%s: hints agree with the UA string', (deviceType) => {
         for (const ua of getUserAgentList(deviceType, 50)) {
             const { metadata, isChromium } = buildUserAgentMetadata(ua);
-            const uaSaysMobile = /Mobile|Android|iPhone/.test(ua);
+            // A phone carries a "Mobile" token; an Android tablet carries
+            // "Android" without it and must report mobile: false, which is what
+            // makes GA4 classify it as a tablet rather than a phone.
+            const isAndroidTablet = /Android/.test(ua) && !/Mobile/.test(ua);
+            const uaSaysMobile = !isAndroidTablet && /Mobile|Android|iPhone/.test(ua);
 
             // The whole point of the fix: no UA may claim mobile while the
             // hints say desktop (that is what GA4 reported as Desktop).

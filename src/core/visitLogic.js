@@ -11,7 +11,9 @@
 const { getLogger, initCampaignLogger, closeCampaignLogger, getCampaignLogDir } = require('../helpers/logger');
 const Constants = require('../helpers/constants');
 const { generateVisitsArray, calculateMetrics, shuffleArray } = require('../helpers/visits');
-const { getUserAgentList, getMatchingScreenSize, getMixedScreenSizes } = require('../helpers/userAgents');
+const { getUserAgentList, getMatchingScreenSize, getMixedScreenSizes,
+        setRuntimeChromeVersion, isInconsistentDeviceType } = require('../helpers/userAgents');
+const { resolveBrowser } = require('../helpers/browserResolver');
 const AutomaticVisitor = require('./automaticVisitor');
 const ManualVisitor = require('./manualVisitor');
 const { SessionReplayStore } = require('../helpers/sessionReplay');
@@ -147,6 +149,18 @@ class VisitLogic {
 
         // Generate data arrays
         logger.info('Generating visit configurations...');
+        // Decide which browser binary will run the visits and read its real
+        // version BEFORE generating user agents, so every UA claims the engine
+        // that is actually behind it instead of a hardcoded guess.
+        const browserInfo = await resolveBrowser({
+            bundledPath: this._bundledChromiumPath || null,
+        });
+        setRuntimeChromeVersion(browserInfo.version);
+
+        if (isInconsistentDeviceType(userAgentType)) {
+            logger.warn(`Device Type "${userAgentType}": Chromium always sends sec-ch-ua headers and a non-Chromium browser never does, so these user agents ship an empty brand list. GA4 cannot resolve that to a browser and will report "Mozilla". Use Default, Desktop, Mobile or Tablet for a browser GA4 can name.`);
+        }
+
         const userAgentList = getUserAgentList(userAgentType, 100);
         // In CSV mode each URL gets its own 100-visit distribution from its own
         // (bounce, duration, pages); in normal mode there is one shared distribution.

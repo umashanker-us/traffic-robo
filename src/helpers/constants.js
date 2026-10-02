@@ -44,7 +44,8 @@ const Constants = {
         FIREFOX: 'Firefox',
         ANDROID: 'Android',
         IPHONE: 'iPhone',
-        WINDOWS: 'Windows'
+        WINDOWS: 'Windows',
+        TABLET: 'Tablet'
     },
 
     // Location Types with Coordinates - FIXED: Added actual coordinates
