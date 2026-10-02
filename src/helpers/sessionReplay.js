@@ -256,7 +256,11 @@ class SessionReplay {
      */
     setSessionInfo(info) {
         this.sessionInfo = {
-            userAgent: info.userAgent ? info.userAgent.substring(0, 100) : '',
+            // 200, not 100: the product token that names the browser sits at
+            // the END of a UA (Edg/, OPR/, SamsungBrowser/), so truncating at
+            // 100 cut it off and the report called every Chromium browser
+            // "Chrome". A reduced UA is ~125-145 characters.
+            userAgent: info.userAgent ? info.userAgent.substring(0, 200) : '',
             screenSize: info.screenSize || {},
             location: info.location || '',
             playMode: info.playMode || '',

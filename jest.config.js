@@ -10,11 +10,12 @@
 module.exports = {
     testEnvironment: 'node',
     testMatch: ['**/tests/**/*.test.js'],
+    // tests/acceptance.js is deliberately not matched: it drives real browsers
+    // against live sites and is run with `npm run test:e2e`.
     collectCoverageFrom: [
         'src/helpers/**/*.js',
+        'src/core/**/*.js',
         '!src/helpers/logger.js',
-        '!src/helpers/extension-helper.js',
-        '!src/helpers/index.js',
     ],
     coverageDirectory: 'coverage',
     coverageReporters: ['text', 'text-summary', 'lcov'],

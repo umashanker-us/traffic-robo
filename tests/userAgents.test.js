@@ -15,7 +15,8 @@ const {
     generateEdgeUA,
     generateAndroidUA,
     generateiPhoneUA,
-    generateWindowsUA,
+    generateWindowsProfile,
+    setRuntimeChromeVersion,
 } = require('../src/helpers/userAgents');
 
 const Constants = require('../src/helpers/constants');
@@ -94,10 +95,22 @@ describe('Browser UA Generators', () => {
         expect(ua).toContain('CPU iPhone OS');
     });
 
-    test('Windows UA should contain Windows NT', () => {
-        const ua = generateWindowsUA();
-        expect(ua).toContain('Windows NT 10.0');
-        expect(ua).toContain('Chrome/');
+    // generateWindowsUA was removed: it still produced a full build number — a
+    // non-reduced Chrome UA that no current Chrome sends. generateWindowsProfile
+    // replaced it and is reduced like the rest.
+    test('Windows profile is Windows, Chromium and reduced', () => {
+        const profile = generateWindowsProfile();
+        expect(profile.ua).toContain('Windows NT 10.0');
+        expect(profile.ua).toMatch(/Chrome\/\d+\.0\.0\.0/);
+        expect(profile.platform).toBe('Windows');
+        expect(profile.mobile).toBe(false);
+    });
+
+    test('the Windows device type never produces a macOS UA', () => {
+        for (const ua of getUserAgentList('Windows', 200)) {
+            expect(ua).toContain('Windows NT');
+            expect(ua).not.toContain('Macintosh');
+        }
     });
 });
 
@@ -189,10 +202,34 @@ describe('getUserAgentList()', () => {
         });
     });
 
-    test('should generate unique UAs (not all identical)', () => {
-        const uas = getUserAgentList('Default', 50);
-        const unique = new Set(uas);
-        expect(unique.size).toBeGreaterThan(20);
+    // Uniqueness is the wrong goal now, and would be the anomaly. Chrome's UA
+    // reduction froze the version and removed the device, so every real Chrome
+    // user on the same browser and platform sends a byte-identical UA. What has
+    // to vary is the set of browser/platform combinations, not the strings.
+    test('the UA set covers several browser and platform combinations', () => {
+        // Pinned, which is what a campaign does: the version comes from the
+        // browser that will run the visits. Unpinned, the fallback version table
+        // multiplies the combinations and the count means less.
+        setRuntimeChromeVersion('154.0.8037.59');
+        try {
+            const uas = getUserAgentList('Default', 500);
+            const distinct = new Set(uas);
+            expect(distinct.size).toBeGreaterThan(5);
+            // and stays small, the way real traffic does
+            expect(distinct.size).toBeLessThan(40);
+        } finally {
+            setRuntimeChromeVersion(null);
+        }
+    });
+
+    test('the set is far smaller than the number of visits either way', () => {
+        const uas = getUserAgentList('Default', 500);
+        expect(new Set(uas).size).toBeLessThan(uas.length / 4);
+    });
+
+    test('visits repeat the same UA, as real users do', () => {
+        const uas = getUserAgentList('Desktop', 200);
+        expect(new Set(uas).size).toBeLessThan(uas.length);
     });
 });
 
@@ -262,7 +299,7 @@ describe('getMatchingScreenSize()', () => {
         });
 
         test('Windows UA → desktop screen', () => {
-            const ua = generateWindowsUA();
+            const ua = generateWindowsProfile().ua;
             const screen = getMatchingScreenSize(ua);
             expect(screen.width).toBeGreaterThanOrEqual(1024);
         });

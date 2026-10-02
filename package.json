@@ -1,12 +1,13 @@
 {
   "name": "ga4-traffic-robo",
-  "version": "2.10.0",
+  "version": "2.11.0",
   "description": "GA4 Compatible Traffic Automation Tool with Realistic User Behavior Simulation",
   "main": "src/main.js",
   "scripts": {
     "start": "electron .",
     "dev": "electron . --dev",
     "test": "jest --verbose",
+    "test:e2e": "node tests/acceptance.js",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
     "test:visits": "jest tests/visits.test.js --verbose",

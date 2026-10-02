@@ -2,7 +2,6 @@
  * User Agent Generator for GA4 Traffic Robo
  * Provides realistic user agents based on current browser market share
  * 
- * FIXED: Added Windows device type handler
  */
 
 const Constants = require('./constants');
@@ -392,22 +391,6 @@ function generateiPhoneUA() {
     return generateSafariUA('mobile');
 }
 
-/**
- * Generate Windows-only user agent (Chrome or Edge on Windows)
- * FIXED: Added this function for Windows device type
- */
-function generateWindowsUA() {
-    const os = getRandomElement(WINDOWS_VERSIONS);
-    const chromeVersion = getChromeVersionString();
-    
-    // 70% Chrome, 30% Edge on Windows
-    if (Math.random() > 0.3) {
-        return `Mozilla/5.0 (${os}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVersion} Safari/537.36`;
-    } else {
-        const edgeVersion = getEdgeVersionString();
-        return `Mozilla/5.0 (${os}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVersion} Safari/537.36 Edg/${edgeVersion}`;
-    }
-}
 
 /**
  * Windows only, Chromium family. generateChromeProfile('desktop') picks macOS
@@ -490,7 +473,6 @@ function isInconsistentDeviceType(userAgentType) {
  * @param {number} count - Number of user agents to generate
  * @returns {string[]} Array of user agents
  * 
- * FIXED: Added Windows case handler
  */
 function getUserAgentList(userAgentType, count = 100) {
     return getUserAgentProfiles(userAgentType, count).map(p => p.ua);
@@ -550,68 +532,25 @@ function legacyUserAgentFor(userAgentType) {
     return legacy[0];
 }
 
+/**
+ * The two device types that cannot carry matching client hints.
+ *
+ * Everything Chromium-based goes through generateUserAgentProfile, which
+ * produces reduced user agents. This function exists only for Firefox and
+ * iPhone, whose UA strings are not subject to Chrome's reduction because they
+ * are not Chrome — and which stay selectable even though GA4 cannot name their
+ * browser. See isInconsistentDeviceType.
+ */
 function legacyUserAgentList(userAgentType, count, out) {
-    const userAgents = out;
-    
     for (let i = 0; i < count; i++) {
-        let ua;
-        
-        switch (userAgentType) {
-            case Constants.DEVICE_TYPES.DEFAULT:
-            case Constants.DEVICE_TYPES.DESK_MOBILE:
-                // 58% desktop, 36% mobile, 6% tablet — and every entry is a
-                // Chromium browser, which is the whole point. Playwright drives
-                // Chromium, and Chromium always sends sec-ch-ua headers that
-                // cannot be suppressed. A Firefox or Safari UA therefore has to
-                // ship an empty brand list, which GA4 cannot resolve to a
-                // browser, so the browser dimension collapses to "Mozilla".
-                // Chrome, Edge, Opera and Samsung Internet each send their own
-                // real brand, so GA4 reports four distinct browsers and the UA
-                // string, the hints and the engine all agree.
-                ua = pickMixedChromiumUA();
-                break;
-
-            case Constants.DEVICE_TYPES.DESKTOP:
-                ua = pickDesktopChromiumUA();
-                break;
-
-            case Constants.DEVICE_TYPES.MOBILE:
-                ua = pickMobileChromiumUA();
-                break;
-
-            case Constants.DEVICE_TYPES.TABLET:
-                ua = generateAndroidTabletUA();
-                break;
-
-            case Constants.DEVICE_TYPES.CHROME:
-                ua = Math.random() > 0.3 ? generateChromeUA('desktop') : generateChromeUA('mobile');
-                break;
-                
-            case Constants.DEVICE_TYPES.FIREFOX:
-                ua = Math.random() > 0.3 ? generateFirefoxUA('desktop') : generateFirefoxUA('mobile');
-                break;
-                
-            case Constants.DEVICE_TYPES.ANDROID:
-                ua = generateAndroidUA();
-                break;
-                
-            case Constants.DEVICE_TYPES.IPHONE:
-                ua = generateiPhoneUA();
-                break;
-            
-            // FIXED: Added Windows case
-            case Constants.DEVICE_TYPES.WINDOWS:
-                ua = generateWindowsUA();
-                break;
-                
-            default:
-                ua = generateChromeUA('desktop');
+        if (userAgentType === Constants.DEVICE_TYPES.IPHONE) {
+            out.push(generateiPhoneUA());
+        } else {
+            // Firefox, and the fallback for an unrecognised type.
+            out.push(Math.random() > 0.3 ? generateFirefoxUA('desktop') : generateFirefoxUA('mobile'));
         }
-        
-        userAgents.push(ua);
     }
-    
-    return userAgents;
+    return out;
 }
 
 /**
@@ -707,5 +646,4 @@ module.exports = {
     generateEdgeUA,
     generateAndroidUA,
     generateiPhoneUA,
-    generateWindowsUA
 };

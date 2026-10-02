@@ -227,3 +227,49 @@ describe('CSV shape', () => {
         }
     });
 });
+
+// ============================================================
+// The report must name every browser the generator produces
+//
+// Every Chromium browser's UA also contains "Chrome/", so testing for that
+// first made Opera and Samsung Internet report as Chrome, and anything with no
+// case at all reported as "Other/Mobile" — which showed up in a real run.
+// ============================================================
+describe('shortenUA covers the whole UA pool', () => {
+    const {
+        getUserAgentList,
+        generateOperaUA,
+        generateSamsungInternetUA,
+        generateAndroidTabletUA,
+        generateEdgeUA,
+        generateChromeUA,
+        generateAndroidUA,
+    } = require('../src/helpers/userAgents');
+
+    function labelFor(ua) {
+        const v = makeVisitor();
+        v.replay.setSessionInfo(Object.assign(v._buildSessionInfo(), { userAgent: ua }));
+        const { headers, row } = csvRows(generateCSV([v.replay.getSummary()]));
+        return row.split(',')[headers.indexOf('UserAgent')];
+    }
+
+    test.each([
+        ['Chrome desktop', () => generateChromeUA('desktop'), 'Chrome/Desktop'],
+        ['Chrome Android', () => generateAndroidUA(), 'Chrome/Mobile'],
+        ['Edge desktop', () => generateEdgeUA(), 'Edge/Desktop'],
+        ['Opera desktop', () => generateOperaUA('desktop'), 'Opera/Desktop'],
+        ['Opera mobile', () => generateOperaUA('mobile'), 'Opera/Mobile'],
+        ['Samsung Internet', () => generateSamsungInternetUA(), 'Samsung/Mobile'],
+        ['Android tablet', () => generateAndroidTabletUA(), 'Chrome/Tablet'],
+    ])('%s is named correctly', (_name, make, expected) => {
+        expect(labelFor(make())).toBe(expected);
+    });
+
+    test('nothing the automatic mixes produce reports as Other', () => {
+        for (const type of ['Default', 'Desktop & Mobile', 'Desktop', 'Mobile', 'Tablet']) {
+            for (const ua of getUserAgentList(type, 40)) {
+                expect(labelFor(ua)).not.toContain('Other');
+            }
+        }
+    });
+});

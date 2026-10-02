@@ -2,7 +2,6 @@
  * Constants and Configuration for GA4 Traffic Robo
  * Similar to Java Constants.java but for Node.js
  * 
- * FIXED: Added location coordinates mapping
  */
 
 const path = require('path');
@@ -48,7 +47,7 @@ const Constants = {
         TABLET: 'Tablet'
     },
 
-    // Location Types with Coordinates - FIXED: Added actual coordinates
+    // Location Types with Coordinates
     LOCATIONS: {
         INDIA: 'India',
         GUJARAT: 'Gujarat',

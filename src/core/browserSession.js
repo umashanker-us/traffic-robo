@@ -299,7 +299,6 @@ class BrowserSession {
     }
     /**
      * Launch browser based on play mode
-     * FIXED: Added extension support for SimilarWeb
      * Uses bundled Chromium in packaged mode
      */
     _buildLaunchArgs() {
@@ -350,7 +349,6 @@ class BrowserSession {
     }
     /**
      * Create browser context with all settings
-     * FIXED: 
      * 1. Location now uses config values
      * 2. Merged route handler for proxy + ad blocking
      * 3. Proper proxy implementation using Playwright's built-in proxy
@@ -866,7 +864,6 @@ class BrowserSession {
         this.logger.info(`Request interception: ${reasons.join(' + ')}`);
     }
     /**
-     * FIXED: Merged route handler for proxy routing + ad blocking
      * This combines both functionalities in a single handler to prevent conflicts
      */
     /**

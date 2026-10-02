@@ -7,7 +7,6 @@
  * - Avg Session Duration: Total time spent on site per session
  * - Pages Per Session: Number of pages visited per session
  * 
- * FIXED: Replaced console.log with logger
  */
 
 const { getLogger } = require('./logger');

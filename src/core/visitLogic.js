@@ -15,6 +15,7 @@ const { getUserAgentList, getUserAgentProfiles, getMatchingScreenSize, getMixedS
         setRuntimeChromeVersion, isInconsistentDeviceType } = require('../helpers/userAgents');
 const { resolveBrowser } = require('../helpers/browserResolver');
 const { probeLanding } = require('../helpers/landingProbe');
+const profilePool = require('../helpers/profilePool');
 const { buildUserAgentMetadata, buildClientHintHeaders } = require('../helpers/clientHints');
 
 /**
@@ -177,6 +178,48 @@ class VisitLogic {
             bundledPath: this._bundledChromiumPath || null,
         });
         setRuntimeChromeVersion(browserInfo.version);
+
+        if (extensionEnabled && extensionPath) {
+            // A profile serves one browser at a time, so a pool smaller than the
+            // thread count makes visits queue for a free profile instead of
+            // running — the campaign silently serialises.
+            const pool = parseInt(extensionProfilePool) || 0;
+            if (pool === 0) {
+                logger.warn('Extension profile pool is 0: every visit gets a throwaway profile, so the extension is reinstalled each time and accumulates nothing. A panel like SimilarWeb will report no data. Set the pool to your thread count.');
+            } else if (pool < threads) {
+                logger.warn(`Extension profile pool (${pool}) is smaller than the thread count (${threads}): ${threads - pool} visit(s) will wait for a free profile at any moment, so the campaign runs slower than configured. Set the pool to at least ${threads}.`);
+            }
+
+            const usage = profilePool.getPoolDiskUsage();
+            if (usage.profiles > 0) {
+                const mb = (usage.bytes / 1024 / 1024).toFixed(0);
+                logger.info(`Extension profiles on disk: ${usage.profiles} profile(s), ${mb} MB (${usage.dir})`);
+                if (usage.bytes > 2 * 1024 * 1024 * 1024) {
+                    logger.warn(`Extension profiles now occupy ${mb} MB. Nothing caps this — use Reset in the Extension card to clear them, which also resets what the panel has seen.`);
+                }
+            }
+
+            // Extensions pin the campaign to the bundled Chromium, which only
+            // moves when Playwright does. A UA claiming a long-superseded Chrome
+            // is a signal in itself.
+            const installed = require('../helpers/browserResolver').findInstalledChrome();
+            if (installed && browserInfo.version) {
+                const running = parseInt(browserInfo.version.split('.')[0], 10);
+                try {
+                    const fs = require('fs');
+                    const exeDir = require('path').dirname(installed);
+                    const versions = fs.readdirSync(exeDir)
+                        .map(n => parseInt(n.split('.')[0], 10))
+                        .filter(n => Number.isFinite(n) && n > 50);
+                    const latest = versions.length ? Math.max(...versions) : null;
+                    if (latest && latest - running >= 6) {
+                        logger.warn(`Extension mode runs the bundled Chromium ${running}, while the Chrome installed here is ${latest}. User agents claim ${running}, which grows more conspicuous the further it falls behind — update Playwright to move the bundled Chromium forward.`);
+                    }
+                } catch {
+                    // Version directory not readable; skip the comparison.
+                }
+            }
+        }
 
         if (isInconsistentDeviceType(userAgentType)) {
             logger.warn(`Device Type "${userAgentType}": Chromium always sends sec-ch-ua headers and a non-Chromium browser never does, so these user agents ship an empty brand list. GA4 cannot resolve that to a browser and will report "Mozilla". Use Default, Desktop, Mobile or Tablet for a browser GA4 can name.`);

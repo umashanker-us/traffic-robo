@@ -165,10 +165,54 @@ function getPoolStats() {
     return { total: profiles.size, busy, waiting: waiting.length, dir: getBaseDir() };
 }
 
+/**
+ * Bytes the pooled profiles occupy on disk.
+ *
+ * A pooled profile is roughly 14 MB and grows as the extension accumulates
+ * state — which is the point, but it means a large pool is not free. Nothing
+ * caps a profile's size, so the figure is reported rather than enforced.
+ *
+ * @returns {{bytes: number, profiles: number, dir: string}}
+ */
+function getPoolDiskUsage() {
+    const dir = getBaseDir();
+    const result = { bytes: 0, profiles: 0, dir };
+    if (!fs.existsSync(dir)) return result;
+
+    const walk = (d) => {
+        let entries;
+        try {
+            entries = fs.readdirSync(d, { withFileTypes: true });
+        } catch {
+            return;
+        }
+        for (const entry of entries) {
+            const full = path.join(d, entry.name);
+            if (entry.isDirectory()) {
+                walk(full);
+            } else {
+                try { result.bytes += fs.statSync(full).size; } catch { /* vanished */ }
+            }
+        }
+    };
+
+    try {
+        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+            if (!entry.isDirectory()) continue;
+            result.profiles += 1;
+            walk(path.join(dir, entry.name));
+        }
+    } catch {
+        // Unreadable pool directory — report what we have.
+    }
+    return result;
+}
+
 module.exports = {
     acquireProfile,
     resetPool,
     getPoolStats,
+    getPoolDiskUsage,
     setBaseDir,
     getBaseDir,
     MAX_POOL_SIZE,

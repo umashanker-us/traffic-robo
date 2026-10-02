@@ -31,10 +31,19 @@ function extractProxyCity(proxyUrl) {
  */
 function shortenUA(ua) {
     if (!ua) return 'Unknown';
-    const isMobile = /Mobile|Android|iPhone|iPad/i.test(ua);
-    const device = isMobile ? 'Mobile' : 'Desktop';
 
+    // An Android UA with no "Mobile" token is a tablet — that pairing is also
+    // what GA4 reads as tablet, so the report must not call it a phone.
+    const isTablet = /iPad/i.test(ua) || (/Android/i.test(ua) && !/Mobile/i.test(ua));
+    const isMobile = !isTablet && /Mobile|Android|iPhone/i.test(ua);
+    const device = isTablet ? 'Tablet' : (isMobile ? 'Mobile' : 'Desktop');
+
+    // Order matters: every Chromium browser also carries "Chrome/", so the
+    // product token has to be tested first or Opera and Samsung Internet both
+    // report as Chrome — and the ones with no case here reported as "Other".
     if (/Edg\//i.test(ua)) return `Edge/${device}`;
+    if (/OPR\//i.test(ua)) return `Opera/${device}`;
+    if (/SamsungBrowser\//i.test(ua)) return `Samsung/${device}`;
     if (/Firefox\//i.test(ua)) return `Firefox/${device}`;
     if (/Safari\//i.test(ua) && !/Chrome\//i.test(ua)) return `Safari/${device}`;
     if (/Chrome\//i.test(ua)) return `Chrome/${device}`;
