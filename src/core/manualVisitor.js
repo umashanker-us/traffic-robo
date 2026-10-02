@@ -136,7 +136,9 @@ class ManualVisitor extends BrowserSession {
                     this.url,
                     this.proxyConfig,
                     this.customProxyPatterns,
-                    this.logger
+                    this.logger,
+                    10,
+                    this._buildRequestIdentity()
                 );
                 urlToNavigate = chainResult.finalUrl;
                 this.logger.info(`Tracker chain resolved via proxy: ${chainResult.hops.length} hop(s) → ${urlToNavigate.substring(0, 120)}`);

@@ -46,7 +46,12 @@ function requestHead(url, headers) {
             method: 'GET',
             // Ask for a single byte: enough for status and headers, and a server
             // that ignores Range still only streams until we destroy the socket.
-            headers: Object.assign({ Range: 'bytes=0-0', Accept: '*/*' }, headers || {}),
+            headers: Object.assign({
+                Range: 'bytes=0-0',
+                // A document Accept, like a browser navigation — a bare */*
+                // from an unknown agent is its own signal in a server log.
+                Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            }, headers || {}),
             timeout: REQUEST_TIMEOUT_MS,
         }, (res) => {
             const result = {
@@ -75,12 +80,16 @@ function requestHead(url, headers) {
  *   isFile false with an error set means "could not tell" — the caller should
  *   carry on and let the browser try, which is the old behaviour.
  */
-async function probeLanding(url, { userAgent } = {}) {
+async function probeLanding(url, { userAgent, acceptLanguage, clientHints } = {}) {
     let current = url;
     let hops = 0;
 
     for (let i = 0; i < MAX_HOPS; i++) {
-        const headers = userAgent ? { 'User-Agent': userAgent } : {};
+        const headers = Object.assign(
+            userAgent ? { 'User-Agent': userAgent } : {},
+            acceptLanguage ? { 'Accept-Language': acceptLanguage } : {},
+            clientHints || {},
+        );
         const res = await requestHead(current, headers);
 
         if (res.error) {

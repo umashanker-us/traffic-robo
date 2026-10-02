@@ -330,6 +330,9 @@ class ProxyRouter {
  * Parameters:
  *   startUrl       — the click-tracker URL pasted as campaign URL
  *   proxyConfig    — parsed proxy config from parseProxyString
+ *   identity       — { userAgent, acceptLanguage, clientHints } of the visit
+ *                    this chain belongs to, so a click log records the same
+ *                    device and browser as the visit itself
  *   patterns       — parsed custom-proxy patterns (only URLs that match
  *                    these will be walked through the proxy; once the chain
  *                    leaves the patterns we stop and return the URL)
@@ -338,7 +341,7 @@ class ProxyRouter {
  *
  * Returns: { finalUrl, hops: [{ url, status, viaProxy }] }
  */
-async function resolveTrackerChain(startUrl, proxyConfig, patterns, logger = null, maxHops = 10) {
+async function resolveTrackerChain(startUrl, proxyConfig, patterns, logger = null, maxHops = 10, identity = {}) {
     const hops = [];
     let currentUrl = startUrl;
     const proxyAuth = (proxyConfig && proxyConfig.username && proxyConfig.password)
@@ -361,11 +364,20 @@ async function resolveTrackerChain(startUrl, proxyConfig, patterns, logger = nul
         const hopResult = await new Promise((hopResolve) => {
             try {
                 const targetUrl = new URL(currentUrl);
-                const headers = {
+                // These hops are what an ad platform's click log actually
+                // records, and they used to go out as a bare "Mozilla/5.0"
+                // with Accept: */*. Parsed server-side that reads as
+                // Device: Desktop, Browser: Mozilla for every click, whatever
+                // the visit's real user agent was. Each hop now carries the
+                // identity of the visit it belongs to.
+                const headers = Object.assign({
                     'Host': targetUrl.host,
-                    'User-Agent': 'Mozilla/5.0',
-                    'Accept': '*/*',
-                };
+                    'User-Agent': identity.userAgent || 'Mozilla/5.0',
+                    // What a browser sends for a document navigation.
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+                    'Accept-Language': identity.acceptLanguage || 'en-US,en;q=0.9',
+                    'Upgrade-Insecure-Requests': '1',
+                }, identity.clientHints || {});
                 if (proxyAuth) headers['Proxy-Authorization'] = `Basic ${proxyAuth}`;
 
                 const req = http.request({

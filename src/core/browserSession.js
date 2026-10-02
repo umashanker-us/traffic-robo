@@ -202,6 +202,29 @@ class BrowserSession {
     }
 
     /**
+     * How this visit should identify itself on requests the app makes outside
+     * the browser — the proxied tracker hops and the landing probe.
+     *
+     * Those requests are what an ad platform's click log records. Sending a
+     * placeholder there made every click read as Desktop / Mozilla no matter
+     * what the visit's real user agent was.
+     *
+     * @returns {{userAgent: string, acceptLanguage: string, clientHints: Object}}
+     */
+    _buildRequestIdentity() {
+        const languages = Constants.getLanguagesForLocation(this.location) || [];
+        const acceptLanguage = languages.length
+            ? languages.map((lang, i) => (i === 0 ? lang : `${lang};q=${(1 - i * 0.1).toFixed(1)}`)).join(',')
+            : 'en-US,en;q=0.9';
+        const metadata = this._uaMetadata || buildUserAgentMetadata(this.userAgent).metadata;
+        return {
+            userAgent: this.userAgent,
+            acceptLanguage,
+            clientHints: buildClientHintHeaders(metadata),
+        };
+    }
+
+    /**
      * Everything the report needs to know about this session, in one place so
      * the two modes cannot describe themselves differently.
      */
