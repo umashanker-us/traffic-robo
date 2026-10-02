@@ -155,7 +155,9 @@ describe('grantExtensionConsent', () => {
     });
 
     test('no service worker means no consent, and it says why', async () => {
-        const result = await grantExtensionConsent(fakeContext({ hasWorker: false }), { profileDir: dir });
+        // An explicit short budget: the default is 30s, which this test has no
+        // reason to sit through.
+        const result = await grantExtensionConsent(fakeContext({ hasWorker: false }), { profileDir: dir, workerTimeoutMs: 50 });
         expect(result.granted).toBe(false);
         expect(result.reason).toMatch(/service worker never started/i);
         expect(hasConsent(dir)).toBe(false);
@@ -201,6 +203,47 @@ describe('grantExtensionConsent', () => {
         expect(asked).toBe(true);
         expect(result.granted).toBe(false);
         expect(result.reason).toMatch(/service worker never started/);
+    });
+
+    // Measured on a 33-visit run with five concurrent browsers: four granted
+    // consent 3s after launch, while the first — which also pays the cost of
+    // creating its profile — had not started its worker 10s in and gave up. So
+    // the budget is spent in short waits that re-check the worker list in
+    // between, because waitForEvent only sees workers registering after it
+    // subscribes and under concurrency one can appear in the gap.
+    test('a worker that appears between waits is still found', async () => {
+        const ctx = fakeContext({ hasWorker: false });
+        let waits = 0;
+        ctx.waitForEvent = async () => {
+            waits += 1;
+            if (waits === 2) {
+                // Registered during the gap, so the event never reaches us.
+                ctx.serviceWorkers = () => [{ url: () => `chrome-extension://${EXT_ID}/background.js` }];
+            }
+            throw new Error('timeout');
+        };
+
+        const result = await grantExtensionConsent(ctx, { profileDir: dir, workerTimeoutMs: 6000 });
+        expect(waits).toBeGreaterThan(1);
+        expect(result.granted).toBe(true);
+        expect(result.extensionId).toBe(EXT_ID);
+    });
+
+    test('the whole budget is spent before giving up, and it says how long', async () => {
+        const ctx = fakeContext({ hasWorker: false });
+        let waited = 0;
+        ctx.waitForEvent = async (_event, opts) => { waited += opts.timeout; throw new Error('timeout'); };
+
+        const result = await grantExtensionConsent(ctx, { profileDir: dir, workerTimeoutMs: 5000 });
+        expect(waited).toBeGreaterThanOrEqual(5000);
+        expect(result.reason).toMatch(/never started within 5000ms/);
+    });
+
+    test('the default budget is generous enough for a cold concurrent start', () => {
+        const src = fs.readFileSync(
+            path.join(__dirname, '..', 'src', 'helpers', 'extensionConsent.js'), 'utf8');
+        const dflt = Number(src.match(/workerTimeoutMs\s*=\s*(\d+)/)[1]);
+        expect(dflt).toBeGreaterThanOrEqual(30000);
     });
 
     test('a navigation failure is reported, not thrown', async () => {

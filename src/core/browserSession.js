@@ -494,16 +494,6 @@ class BrowserSession {
 
             this.context = await chromium.launchPersistentContext(this._tempUserDataDir, persistentOptions);
             this.browser = this.context.browser();
-            this.logger.info(this._profileLease.pooled
-                ? `Persistent context launched with extension (pooled profile ${this.extensionProfileId})`
-                : `Persistent context launched with extension (throwaway profile)`);
-
-            // A reused profile still holds the last visit's GA cookies, which
-            // would make this visit read as returning. Returning visits get
-            // their cookies injected from the jar instead, so clear either way.
-            if (this._profileLease.pooled) {
-                await this._resetGACookies();
-            }
 
             // Auto-close the extension's own tabs as they appear — except while
             // consent is being granted, which happens on the extension's options
@@ -521,9 +511,13 @@ class BrowserSession {
             // connection timed out and the error page finally committed. A
             // navigation request names the target immediately.
             const closeIfExtensionOwn = (page, url) => {
-                if (this._grantingConsent) return;
                 if (page === this.page) return;           // never the campaign page
                 if (!isExtensionOwnPage(url)) return;
+                // Only the options page is exempt while consent is granted —
+                // that is the page doing the granting. The welcome tab the
+                // extension opens in the same window is not, which is the whole
+                // point: it appears *because* consent was granted.
+                if (this._grantingConsent && url.startsWith('chrome-extension://')) return;
                 page.close().catch(() => {});
             };
 
@@ -559,11 +553,47 @@ class BrowserSession {
                 }
             });
 
+            // The extension opens its welcome tab as it installs, which is
+            // before any of the setup below has run. Attaching the listener
+            // after that — there used to be a _resetGACookies() await in
+            // between — meant the one tab a user actually complains about was
+            // never seen by it, so nothing ever closed it.
+            //
+            // Anything already open by the time we get here gets the same
+            // treatment. this.page does not exist yet, so the campaign-page
+            // guard cannot misfire.
+            for (const existing of this.context.pages()) {
+                closeIfExtensionOwn(existing, existing.url());
+            }
+
+            this.logger.info(this._profileLease.pooled
+                ? `Persistent context launched with extension (pooled profile ${this.extensionProfileId})`
+                : `Persistent context launched with extension (throwaway profile)`);
+
+            // A reused profile still holds the last visit's GA cookies, which
+            // would make this visit read as returning. Returning visits get
+            // their cookies injected from the jar instead, so clear either way.
+            if (this._profileLease.pooled) {
+                await this._resetGACookies();
+            }
+
+
             // The extension reports nothing until consent is granted, and the
             // setting lives in the profile — so this runs once per pooled
             // profile and is skipped thereafter. Measured on v6.12.24: without
             // it, browsing produces zero SimilarWeb traffic.
             await this._grantExtensionConsent();
+
+            // Anything the extension opened during the consent window has
+            // already fired its request and framenavigated events, so a sweep
+            // is the only thing that can still catch it.
+            for (const open of this.context.pages()) {
+                try {
+                    if (!open.isClosed()) closeIfExtensionOwn(open, open.url());
+                } catch {
+                    // The page closed itself; nothing to do.
+                }
+            }
         } else {
             this.context = await this.browser.newContext(contextOptions);
         }
@@ -1324,7 +1354,11 @@ class BrowserSession {
             if (value === EXPIRED) {
                 this._deadlineMisses = (this._deadlineMisses || 0) + 1;
                 this.logger.warn(`${label} did not return within ${ms}ms — the page has stopped responding, moving on`);
-                if (this.replay) this.replay.logError('deadline', `${label} exceeded ${ms}ms`);
+                // Recorded, but not as an error: the page is loaded and GA4
+                // already has its beacon, so the visit is a success with one
+                // cosmetic step skipped. logError increments stats.errors,
+                // which showed 12 phantom errors in a campaign that had none.
+                if (this.replay) this.replay._addEvent('deadline', { label, ms });
                 return { ok: false, value: undefined };
             }
             return { ok: true, value };

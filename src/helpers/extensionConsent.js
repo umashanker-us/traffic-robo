@@ -87,7 +87,7 @@ function findExtensionId(context) {
  * @param {Object} [options.logger]
  * @param {number} [options.attempts=3]
  * @param {number} [options.settleMs=1200] - per-attempt wait for the page to persist it
- * @param {number} [options.workerTimeoutMs=10000] - wait for the extension to start
+ * @param {number} [options.workerTimeoutMs=30000] - total budget for the extension to start
  * @returns {Promise<{granted: boolean, alreadyGranted: boolean, reason: string|null, extensionId: string|null, attempts: number}>}
  */
 async function grantExtensionConsent(context, {
@@ -95,7 +95,7 @@ async function grantExtensionConsent(context, {
     logger = null,
     attempts = 3,
     settleMs = 1200,
-    workerTimeoutMs = 10000,
+    workerTimeoutMs = 30000,
 } = {}) {
     const log = (level, msg) => { if (logger && logger[level]) logger[level](msg); };
 
@@ -103,20 +103,38 @@ async function grantExtensionConsent(context, {
         return { granted: true, alreadyGranted: true, reason: null, extensionId: findExtensionId(context), attempts: 0 };
     }
 
-    // The extension's service worker starts a moment after the browser does, and
-    // its id can only be read from there. Under concurrency it is routinely not
-    // up yet when the first visit asks.
+    // The extension's service worker starts a moment after the browser does,
+    // and its id can only be read from there.
+    //
+    // A single 10s waitForEvent was not enough. Measured on a 33-visit run with
+    // five concurrent browsers: four granted consent 3s after launch, while the
+    // first — which also pays the cost of creating its profile — had not
+    // started its worker 10s in and gave up. That visit loaded the extension
+    // and reported nothing.
+    //
+    // So the budget is larger, and it is spent in short waits that re-check the
+    // worker list in between: waitForEvent only sees workers that register
+    // after it subscribes, and under this much concurrency one can appear in
+    // the gap.
     let extensionId = findExtensionId(context);
-    if (!extensionId) {
+    const workerDeadline = Date.now() + workerTimeoutMs;
+    while (!extensionId && Date.now() < workerDeadline) {
+        const slice = Math.min(2000, workerDeadline - Date.now());
         try {
-            await context.waitForEvent('serviceworker', { timeout: workerTimeoutMs });
+            await context.waitForEvent('serviceworker', { timeout: slice });
         } catch {
-            // fall through to the check below
+            // No worker in this slice; re-check the list and keep waiting.
         }
         extensionId = findExtensionId(context);
     }
     if (!extensionId) {
-        return { granted: false, alreadyGranted: false, reason: 'the extension service worker never started', extensionId: null, attempts: 0 };
+        return {
+            granted: false,
+            alreadyGranted: false,
+            reason: `the extension service worker never started within ${workerTimeoutMs}ms`,
+            extensionId: null,
+            attempts: 0,
+        };
     }
 
     let page = null;

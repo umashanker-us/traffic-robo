@@ -92,3 +92,79 @@ describe('what the close is wired to', () => {
         expect(handler).toMatch(/mainFrame\(\)/);
     });
 });
+
+/**
+ * The listener used to be attached after the launch *and* after an awaited
+ * _resetGACookies(). The extension opens its welcome tab while it installs —
+ * inside that window — so the one tab a user actually complains about was never
+ * seen by the listener at all, and nothing closed it for the whole visit. The
+ * fast-close measurement missed this because it opened its own tabs afterwards.
+ */
+describe('when the close is attached', () => {
+    const source = fs.readFileSync(
+        path.join(__dirname, '..', 'src', 'core', 'browserSession.js'), 'utf8');
+
+    const launchAt = source.indexOf('await chromium.launchPersistentContext');
+    const listenerAt = source.indexOf("this.context.on('page'", launchAt);
+    const sweepAt = source.indexOf('this.context.pages()', launchAt);
+    const resetAt = source.indexOf('await this._resetGACookies()', launchAt);
+
+    test('all three anchors are present', () => {
+        expect(launchAt).toBeGreaterThan(-1);
+        expect(listenerAt).toBeGreaterThan(-1);
+        expect(sweepAt).toBeGreaterThan(-1);
+        expect(resetAt).toBeGreaterThan(-1);
+    });
+
+    test('the listener goes on before anything else awaits', () => {
+        const between = source.slice(launchAt, listenerAt);
+        // One await is the launch itself; there must be no further await before
+        // the listener is attached.
+        expect(between.match(/\bawait\b/g).length).toBe(1);
+    });
+
+    test('it is attached before the GA cookie reset, not after', () => {
+        expect(listenerAt).toBeLessThan(resetAt);
+        expect(sweepAt).toBeLessThan(resetAt);
+    });
+
+    test('tabs already open at that point are swept too', () => {
+        const sweep = source.slice(sweepAt - 200, sweepAt + 200);
+        expect(sweep).toMatch(/closeIfExtensionOwn/);
+    });
+});
+
+/**
+ * The consent exemption used to cover every extension-owned tab. Measured on a
+ * 33-visit run: three chrome-error://chromewebdata/ tabs survived their whole
+ * visit. The extension opens its welcome tab *because* consent was granted, so
+ * the tab appears while the flag is still set, is skipped once, and is never
+ * reconsidered — its request and framenavigated events have already fired. It
+ * then fails to resolve and leaves the error page on screen.
+ */
+describe('the consent window', () => {
+    const source = fs.readFileSync(
+        path.join(__dirname, '..', 'src', 'core', 'browserSession.js'), 'utf8');
+    const guard = source.slice(
+        source.indexOf('const closeIfExtensionOwn'),
+        source.indexOf('this.context.on(\'page\''));
+
+    test('the exemption is narrowed to the options page, not every tab', () => {
+        // A bare `if (this._grantingConsent) return;` is the bug.
+        expect(guard).not.toMatch(/if \(this\._grantingConsent\) return;/);
+        expect(guard).toMatch(/_grantingConsent && url\.startsWith\('chrome-extension:\/\/'\)/);
+    });
+
+    test('a second sweep runs once consent is done', () => {
+        const afterConsent = source.slice(
+            source.indexOf('await this._grantExtensionConsent();'),
+            source.indexOf('await this._grantExtensionConsent();') + 700);
+        expect(afterConsent).toMatch(/this\.context\.pages\(\)/);
+        expect(afterConsent).toMatch(/closeIfExtensionOwn/);
+    });
+
+    // The error page is the shape the surviving tab actually took.
+    test('the error page is something the guard matches', () => {
+        expect(isExtensionOwnPage('chrome-error://chromewebdata/')).toBe(true);
+    });
+});

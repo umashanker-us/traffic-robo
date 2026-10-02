@@ -29,8 +29,11 @@ const BrowserSession = require('./browserSession');
 // lives. Measured on a live run: one visit sat 494s in its behaviour phase and
 // held a worker slot throughout. These are the ceilings for a renderer that is
 // merely busy — a healthy page answers any of them in single-digit ms.
-const ACTION_TIMEOUT_MS = 5000;
-const LINK_TIMEOUT_MS = 10000;
+// Tuned against a live run: at 5s an ad-heavy page produced 12 misses from
+// nothing worse than a busy main thread. The hang these exist for was 494
+// seconds, so there is no need to sit close to normal slowness.
+const ACTION_TIMEOUT_MS = 15000;
+const LINK_TIMEOUT_MS = 20000;
 
 class AutomaticVisitor extends BrowserSession {
     constructor(config) {

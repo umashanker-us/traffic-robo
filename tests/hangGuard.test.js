@@ -39,7 +39,7 @@ function makeVisitor(overrides = {}) {
         ...overrides,
     });
     v.logger = { info: jest.fn(), warn: jest.fn(), debug: jest.fn(), error: jest.fn() };
-    v.replay = { logError: jest.fn(), logBehavior: jest.fn() };
+    v.replay = { logError: jest.fn(), logBehavior: jest.fn(), _addEvent: jest.fn() };
     return v;
 }
 
@@ -68,7 +68,11 @@ describe('_withDeadline', () => {
         expect(result.value).toBeUndefined();
         expect(v.logger.warn.mock.calls[0][0]).toMatch(/Scroll did not return within 25ms/);
         expect(v.logger.warn.mock.calls[0][0]).toMatch(/stopped responding/);
-        expect(v.replay.logError).toHaveBeenCalledWith('deadline', 'Scroll exceeded 25ms');
+        // Recorded as an event, never as an error: the page is loaded and GA4
+        // already has its beacon, so the visit succeeded with one cosmetic step
+        // skipped. Counting it put 12 phantom errors in a clean campaign.
+        expect(v.replay._addEvent).toHaveBeenCalledWith('deadline', { label: 'Scroll', ms: 25 });
+        expect(v.replay.logError).not.toHaveBeenCalled();
         expect(v._deadlineMisses).toBe(1);
     });
 
@@ -117,6 +121,30 @@ describe('_withDeadline', () => {
 
     test('both visitors share the same guard', () => {
         expect(ManualVisitor.prototype._withDeadline).toBe(AutomaticVisitor.prototype._withDeadline);
+    });
+});
+
+describe('the timeouts themselves', () => {
+    const source = require('fs').readFileSync(
+        require('path').join(__dirname, '..', 'src', 'core', 'automaticVisitor.js'), 'utf8');
+    const constant = (name) => Number(source.match(new RegExp(`${name}\\s*=\\s*(\\d+)`))[1]);
+
+    // A busy renderer is not a wedged one. At 5s a live 33-visit run against an
+    // ad-heavy site produced 12 misses — 10 mouse moves, 2 scrolls — on pages
+    // that were only slow. The hang these exist for was 494 seconds, so sitting
+    // anywhere near normal slowness buys nothing.
+    test('an action gets enough room that a merely busy page is not cut off', () => {
+        expect(constant('ACTION_TIMEOUT_MS')).toBeGreaterThanOrEqual(15000);
+    });
+
+    test('link harvesting gets more room than a single action', () => {
+        expect(constant('LINK_TIMEOUT_MS')).toBeGreaterThan(constant('ACTION_TIMEOUT_MS'));
+    });
+
+    // And still far below the ceiling, so a wedge is caught by the deadline
+    // rather than by killing the browser.
+    test('both stay well under the visit ceiling', () => {
+        expect(constant('LINK_TIMEOUT_MS')).toBeLessThan(makeVisitor()._visitCeilingMs() / 2);
     });
 });
 
@@ -201,7 +229,7 @@ describe('behaviour on a page that stopped responding', () => {
         v.page = wedgedPage();
 
         const done = v._simulateScrolling(1.0, async () => {});
-        await jest.advanceTimersByTimeAsync(30000);
+        await jest.advanceTimersByTimeAsync(90000);
         await done;
 
         // One miss, not one per scroll in the sequence.
@@ -215,7 +243,7 @@ describe('behaviour on a page that stopped responding', () => {
         v.page = wedgedPage();
 
         const done = v._simulateMouseMovement(async () => {});
-        await jest.advanceTimersByTimeAsync(30000);
+        await jest.advanceTimersByTimeAsync(90000);
         await done;
 
         expect(v._deadlineMisses).toBe(1);
@@ -228,7 +256,7 @@ describe('behaviour on a page that stopped responding', () => {
         v.page = wedgedPage();
 
         const pending = v._getPageLinks();
-        await jest.advanceTimersByTimeAsync(30000);
+        await jest.advanceTimersByTimeAsync(90000);
 
         await expect(pending).resolves.toEqual([]);
         expect(v._deadlineMisses).toBe(1);
@@ -240,7 +268,7 @@ describe('behaviour on a page that stopped responding', () => {
         v.page = wedgedPage();
 
         const done = v._simulateQuickGlance();
-        await jest.advanceTimersByTimeAsync(30000);
+        await jest.advanceTimersByTimeAsync(90000);
         await done;
 
         expect(v._deadlineMisses).toBeGreaterThanOrEqual(1);
