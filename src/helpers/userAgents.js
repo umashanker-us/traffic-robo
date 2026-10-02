@@ -117,6 +117,32 @@ const IPHONE_MODELS = [
     { model: 'iPhone16,1', version: '18_1' },   // iPhone 15 Pro
 ];
 
+// ===== Chrome's User-Agent Reduction =====
+//
+// Since Chrome 110 the UA string is frozen. Measured against the installed
+// Chrome 154: it sends `Chrome/154.0.0.0`, not its real build. The platform and
+// device detail were removed from the UA entirely — Windows is pinned to
+// "Windows NT 10.0; Win64; x64", macOS to "10_15_7" whatever the real version,
+// and Android to "Android 10; K" whatever the real device. The real values moved
+// to the client hints, which a server receives only if it asks.
+//
+// Generating a full build number and a real device model in the UA is therefore
+// a tell in itself: it says "not a current Chrome". The real detail still
+// reaches GA4, through the hints.
+const REDUCED_WINDOWS = 'Windows NT 10.0; Win64; x64';
+const REDUCED_MAC = 'Macintosh; Intel Mac OS X 10_15_7';
+const REDUCED_ANDROID = 'Linux; Android 10; K';
+
+const WINDOWS_PLATFORM_VERSIONS = ['15.0.0', '10.0.0'];
+const MAC_PLATFORM_VERSIONS = ['15.2.0', '15.1.0', '14.7.2'];
+
+/**
+ * The frozen version Chrome puts in the UA: major, then 0.0.0.
+ */
+function reducedVersion(fullVersion) {
+    return `${String(fullVersion).split('.')[0]}.0.0.0`;
+}
+
 /**
  * Get random element from array
  */
@@ -177,15 +203,41 @@ function getEdgeVersionString() {
  * Generate Chrome user agent
  */
 function generateChromeUA(platform = 'desktop') {
+    return generateChromeProfile(platform).ua;
+}
+
+/**
+ * A Chrome profile: the reduced UA string plus the real platform and device,
+ * which belong in the client hints rather than the UA.
+ *
+ * @param {string} platform - 'desktop' | 'mobile'
+ * @returns {{ua: string, platform: string, platformVersion: string, model: string, mobile: boolean, fullVersion: string}}
+ */
+function generateChromeProfile(platform = 'desktop') {
     const chromeVersion = getChromeVersionString();
-    
-    if (platform === 'desktop') {
-        const os = Math.random() > 0.3 ? getRandomElement(WINDOWS_VERSIONS) : getRandomElement(MAC_VERSIONS);
-        return `Mozilla/5.0 (${os}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVersion} Safari/537.36`;
-    } else if (platform === 'mobile') {
+    const uaVersion = reducedVersion(chromeVersion);
+
+    if (platform === 'mobile') {
         const device = getRandomElement(ANDROID_DEVICES);
-        return `Mozilla/5.0 (Linux; Android ${device.version}; ${device.device}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVersion} Mobile Safari/537.36`;
+        return {
+            ua: `Mozilla/5.0 (${REDUCED_ANDROID}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${uaVersion} Mobile Safari/537.36`,
+            platform: 'Android',
+            platformVersion: `${device.version}.0.0`,
+            model: device.device,
+            mobile: true,
+            fullVersion: chromeVersion,
+        };
     }
+
+    const onWindows = Math.random() > 0.3;
+    return {
+        ua: `Mozilla/5.0 (${onWindows ? REDUCED_WINDOWS : REDUCED_MAC}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${uaVersion} Safari/537.36`,
+        platform: onWindows ? 'Windows' : 'macOS',
+        platformVersion: getRandomElement(onWindows ? WINDOWS_PLATFORM_VERSIONS : MAC_PLATFORM_VERSIONS),
+        model: '',
+        mobile: false,
+        fullVersion: chromeVersion,
+    };
 }
 
 /**
@@ -224,10 +276,20 @@ function generateSafariUA(platform = 'desktop') {
  * Generate Edge user agent
  */
 function generateEdgeUA() {
+    return generateEdgeProfile().ua;
+}
+
+function generateEdgeProfile() {
     const edgeVersion = getEdgeVersionString();
     const chromeVersion = getChromeVersionString();
-    const os = getRandomElement(WINDOWS_VERSIONS);
-    return `Mozilla/5.0 (${os}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVersion} Safari/537.36 Edg/${edgeVersion}`;
+    return {
+        ua: `Mozilla/5.0 (${REDUCED_WINDOWS}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${reducedVersion(chromeVersion)} Safari/537.36 Edg/${reducedVersion(edgeVersion)}`,
+        platform: 'Windows',
+        platformVersion: getRandomElement(WINDOWS_PLATFORM_VERSIONS),
+        model: '',
+        mobile: false,
+        fullVersion: edgeVersion,
+    };
 }
 
 /**
@@ -236,26 +298,60 @@ function generateEdgeUA() {
  * the UA string and the hints agree and GA4 reports a distinct browser.
  */
 function generateOperaUA(platform = 'desktop') {
+    return generateOperaProfile(platform).ua;
+}
+
+/**
+ * Opera is Chromium with its own OPR/ token and its own client-hint brand, so
+ * the UA and the hints agree and GA4 reports a distinct browser.
+ */
+function generateOperaProfile(platform = 'desktop') {
     const chromeVersion = getChromeVersionString();
     const opera = getRandomElement(OPERA_VERSIONS);
     const operaVersion = `${opera}.0.${5900 + Math.floor(Math.random() * 400)}.${Math.floor(Math.random() * 90) + 10}`;
 
     if (platform === 'mobile') {
         const device = getRandomElement(ANDROID_DEVICES);
-        return `Mozilla/5.0 (Linux; Android ${device.version}; ${device.device}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVersion} Mobile Safari/537.36 OPR/${operaVersion}`;
+        return {
+            ua: `Mozilla/5.0 (${REDUCED_ANDROID}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${reducedVersion(chromeVersion)} Mobile Safari/537.36 OPR/${reducedVersion(operaVersion)}`,
+            platform: 'Android',
+            platformVersion: `${device.version}.0.0`,
+            model: device.device,
+            mobile: true,
+            fullVersion: operaVersion,
+        };
     }
-    const os = Math.random() > 0.3 ? getRandomElement(WINDOWS_VERSIONS) : getRandomElement(MAC_VERSIONS);
-    return `Mozilla/5.0 (${os}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVersion} Safari/537.36 OPR/${operaVersion}`;
+
+    const onWindows = Math.random() > 0.3;
+    return {
+        ua: `Mozilla/5.0 (${onWindows ? REDUCED_WINDOWS : REDUCED_MAC}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${reducedVersion(chromeVersion)} Safari/537.36 OPR/${reducedVersion(operaVersion)}`,
+        platform: onWindows ? 'Windows' : 'macOS',
+        platformVersion: getRandomElement(onWindows ? WINDOWS_PLATFORM_VERSIONS : MAC_PLATFORM_VERSIONS),
+        model: '',
+        mobile: false,
+        fullVersion: operaVersion,
+    };
 }
 
 /**
  * Generate a Samsung Internet user agent (Android only, as it ships).
  */
 function generateSamsungInternetUA() {
+    return generateSamsungInternetProfile().ua;
+}
+
+function generateSamsungInternetProfile() {
     const device = getRandomElement(ANDROID_DEVICES);
     const chromeVersion = getChromeVersionString();
     const sb = getRandomElement(SAMSUNG_BROWSER_VERSIONS);
-    return `Mozilla/5.0 (Linux; Android ${device.version}; ${device.device}) AppleWebKit/537.36 (KHTML, like Gecko) SamsungBrowser/${sb} Chrome/${chromeVersion} Mobile Safari/537.36`;
+    return {
+        ua: `Mozilla/5.0 (${REDUCED_ANDROID}) AppleWebKit/537.36 (KHTML, like Gecko) SamsungBrowser/${sb} Chrome/${reducedVersion(chromeVersion)} Mobile Safari/537.36`,
+        platform: 'Android',
+        platformVersion: `${device.version}.0.0`,
+        model: device.device,
+        mobile: true,
+        fullVersion: sb,
+    };
 }
 
 /**
@@ -264,18 +360,29 @@ function generateSamsungInternetUA() {
  * is what makes GA4 classify the device as tablet instead of mobile.
  */
 function generateAndroidTabletUA() {
+    return generateAndroidTabletProfile().ua;
+}
+
+function generateAndroidTabletProfile() {
     const tablet = getRandomElement(ANDROID_TABLETS);
     const chromeVersion = getChromeVersionString();
-    return `Mozilla/5.0 (Linux; Android ${tablet.version}; ${tablet.device}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVersion} Safari/537.36`;
+    return {
+        // No "Mobile" token: that is how Chrome presents on an Android tablet,
+        // and with mobile:false in the hints it is what GA4 reads as tablet.
+        ua: `Mozilla/5.0 (${REDUCED_ANDROID}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${reducedVersion(chromeVersion)} Safari/537.36`,
+        platform: 'Android',
+        platformVersion: `${tablet.version}.0.0`,
+        model: tablet.device,
+        mobile: false,
+        fullVersion: chromeVersion,
+    };
 }
 
 /**
  * Generate Android mobile user agent
  */
 function generateAndroidUA() {
-    const device = getRandomElement(ANDROID_DEVICES);
-    const chromeVersion = getChromeVersionString();
-    return `Mozilla/5.0 (Linux; Android ${device.version}; ${device.device}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVersion} Mobile Safari/537.36`;
+    return generateChromeProfile('mobile').ua;
 }
 
 /**
@@ -303,14 +410,37 @@ function generateWindowsUA() {
 }
 
 /**
+ * Windows only, Chromium family. generateChromeProfile('desktop') picks macOS
+ * 30% of the time, which is wrong for a device type that names an OS.
+ */
+function generateWindowsProfile() {
+    if (Math.random() > 0.3) {
+        const chromeVersion = getChromeVersionString();
+        return {
+            ua: `Mozilla/5.0 (${REDUCED_WINDOWS}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${reducedVersion(chromeVersion)} Safari/537.36`,
+            platform: 'Windows',
+            platformVersion: getRandomElement(WINDOWS_PLATFORM_VERSIONS),
+            model: '',
+            mobile: false,
+            fullVersion: chromeVersion,
+        };
+    }
+    return generateEdgeProfile();
+}
+
+/**
  * Desktop, Chromium family only. Shares lean to the Indian desktop market:
  * Chrome dominant, Edge second (it ships with Windows), Opera a long tail.
  */
 function pickDesktopChromiumUA() {
+    return pickDesktopChromiumProfile().ua;
+}
+
+function pickDesktopChromiumProfile() {
     const r = Math.random();
-    if (r < 0.80) return generateChromeUA('desktop');
-    if (r < 0.95) return generateEdgeUA();
-    return generateOperaUA('desktop');
+    if (r < 0.80) return generateChromeProfile('desktop');
+    if (r < 0.95) return generateEdgeProfile();
+    return generateOperaProfile('desktop');
 }
 
 /**
@@ -318,20 +448,28 @@ function pickDesktopChromiumUA() {
  * (the default browser on every Samsung handset), Opera a long tail.
  */
 function pickMobileChromiumUA() {
+    return pickMobileChromiumProfile().ua;
+}
+
+function pickMobileChromiumProfile() {
     const r = Math.random();
-    if (r < 0.82) return generateAndroidUA();
-    if (r < 0.94) return generateSamsungInternetUA();
-    return generateOperaUA('mobile');
+    if (r < 0.82) return generateChromeProfile('mobile');
+    if (r < 0.94) return generateSamsungInternetProfile();
+    return generateOperaProfile('mobile');
 }
 
 /**
  * The mixed default: desktop, mobile and a slice of tablet.
  */
 function pickMixedChromiumUA() {
+    return pickMixedChromiumProfile().ua;
+}
+
+function pickMixedChromiumProfile() {
     const r = Math.random();
-    if (r < 0.58) return pickDesktopChromiumUA();
-    if (r < 0.94) return pickMobileChromiumUA();
-    return generateAndroidTabletUA();
+    if (r < 0.58) return pickDesktopChromiumProfile();
+    if (r < 0.94) return pickMobileChromiumProfile();
+    return generateAndroidTabletProfile();
 }
 
 /**
@@ -355,7 +493,65 @@ function isInconsistentDeviceType(userAgentType) {
  * FIXED: Added Windows case handler
  */
 function getUserAgentList(userAgentType, count = 100) {
-    const userAgents = [];
+    return getUserAgentProfiles(userAgentType, count).map(p => p.ua);
+}
+
+/**
+ * Generate user agents together with the device detail that no longer fits in
+ * the UA string. Chrome's UA reduction froze the platform and removed the
+ * model, so the real values have to travel separately and end up in the client
+ * hints — that is where GA4 reads them from.
+ *
+ * @param {string} userAgentType - Type from Constants.DEVICE_TYPES
+ * @param {number} count
+ * @returns {Array<{ua: string, platform: string, platformVersion: string, model: string, mobile: boolean}>}
+ */
+function getUserAgentProfiles(userAgentType, count = 100) {
+    const profiles = [];
+    for (let i = 0; i < count; i++) {
+        profiles.push(generateUserAgentProfile(userAgentType));
+    }
+    return profiles;
+}
+
+/**
+ * One profile for a device type. Non-Chromium types have no matching hints at
+ * all, so they carry no device detail — see isInconsistentDeviceType.
+ */
+function generateUserAgentProfile(userAgentType) {
+    switch (userAgentType) {
+        case Constants.DEVICE_TYPES.DEFAULT:
+        case Constants.DEVICE_TYPES.DESK_MOBILE:
+            return pickMixedChromiumProfile();
+        case Constants.DEVICE_TYPES.DESKTOP:
+            return pickDesktopChromiumProfile();
+        case Constants.DEVICE_TYPES.MOBILE:
+            return pickMobileChromiumProfile();
+        case Constants.DEVICE_TYPES.TABLET:
+            return generateAndroidTabletProfile();
+        case Constants.DEVICE_TYPES.CHROME:
+            return generateChromeProfile(Math.random() > 0.3 ? 'desktop' : 'mobile');
+        case Constants.DEVICE_TYPES.ANDROID:
+            return generateChromeProfile('mobile');
+        case Constants.DEVICE_TYPES.WINDOWS:
+            return generateWindowsProfile();
+        default:
+            // Firefox and iPhone: no hints can match these, so no detail either.
+            return { ua: legacyUserAgentFor(userAgentType), platform: '', platformVersion: '', model: '', mobile: false };
+    }
+}
+
+/**
+ * The non-Chromium types, kept because they remain selectable.
+ */
+function legacyUserAgentFor(userAgentType) {
+    const legacy = [];
+    legacyUserAgentList(userAgentType, 1, legacy);
+    return legacy[0];
+}
+
+function legacyUserAgentList(userAgentType, count, out) {
+    const userAgents = out;
     
     for (let i = 0; i < count; i++) {
         let ua;
@@ -480,6 +676,18 @@ function getMobileScreens(count = 100) {
 
 module.exports = {
     getUserAgentList,
+    getUserAgentProfiles,
+    generateUserAgentProfile,
+    generateChromeProfile,
+    generateEdgeProfile,
+    generateOperaProfile,
+    generateSamsungInternetProfile,
+    generateAndroidTabletProfile,
+    generateWindowsProfile,
+    pickDesktopChromiumProfile,
+    pickMobileChromiumProfile,
+    pickMixedChromiumProfile,
+    reducedVersion,
     generateOperaUA,
     generateSamsungInternetUA,
     generateAndroidTabletUA,

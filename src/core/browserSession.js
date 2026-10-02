@@ -73,6 +73,9 @@ class BrowserSession {
         this.logger = getLogger(this.threadId);
 
         this.userAgent = config.userAgent;
+        // The device detail the UA no longer carries (Chrome's UA reduction):
+        // real platform version and model, for the client hints.
+        this.userAgentProfile = config.userAgentProfile || null;
         this.screenSize = config.screenSize;
         this.playMode = config.playMode;
         this.adsBlock = config.adsBlock || false;
@@ -212,7 +215,7 @@ class BrowserSession {
      * @returns {{userAgent: string, acceptLanguage: string, clientHints: Object}}
      */
     _buildRequestIdentity() {
-        const metadata = this._uaMetadata || buildUserAgentMetadata(this.userAgent).metadata;
+        const metadata = this._uaMetadata || buildUserAgentMetadata(this.userAgent, this.userAgentProfile).metadata;
         return {
             userAgent: this.userAgent,
             acceptLanguage: this._buildAcceptLanguage(),
@@ -356,7 +359,7 @@ class BrowserSession {
         const isHeadless = this.playMode === Constants.PLAY_MODES.FASTEST ||
                           this.playMode === Constants.PLAY_MODES.FAST;
         const isMobileUA = this.userAgent.includes('Mobile');
-        const { metadata: uaMetadata } = buildUserAgentMetadata(this.userAgent);
+        const { metadata: uaMetadata } = buildUserAgentMetadata(this.userAgent, this.userAgentProfile);
         this._uaMetadata = uaMetadata;
         const contextOptions = {
             userAgent: this.userAgent,
@@ -1004,7 +1007,7 @@ class BrowserSession {
      * over CDP, so new pages are hooked as they open.
      */
     async _applyClientHints() {
-        const metadata = this._uaMetadata || buildUserAgentMetadata(this.userAgent).metadata;
+        const metadata = this._uaMetadata || buildUserAgentMetadata(this.userAgent, this.userAgentProfile).metadata;
         this._hintedPages = new WeakSet();
 
         const apply = async (page) => {

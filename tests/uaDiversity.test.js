@@ -17,6 +17,7 @@
 
 const {
     getUserAgentList,
+    getUserAgentProfiles,
     getMatchingScreenSize,
     generateChromeUA,
     generateEdgeUA,
@@ -24,6 +25,8 @@ const {
     generateOperaUA,
     generateSamsungInternetUA,
     generateAndroidTabletUA,
+    generateAndroidTabletProfile,
+    generateChromeProfile,
     isInconsistentDeviceType,
     setRuntimeChromeVersion,
     getRuntimeChromeVersion,
@@ -99,11 +102,29 @@ describe('Android tablets report as tablets', () => {
     });
 
     // mobile:false + platform Android is the pairing GA4 reads as "tablet".
-    test('a tablet reports mobile: false on Android, with its model', () => {
+    test('a tablet reports mobile: false on Android', () => {
         const { metadata } = buildUserAgentMetadata(generateAndroidTabletUA());
         expect(metadata.mobile).toBe(false);
         expect(metadata.platform).toBe('Android');
-        expect(metadata.model).not.toBe('');
+    });
+
+    // Chrome's UA reduction took the model out of the UA entirely, so it has to
+    // come from the profile — the UA alone cannot supply it any more.
+    test('the model comes from the profile, not the UA', () => {
+        const profile = generateAndroidTabletProfile();
+        expect(profile.model).not.toBe('');
+        expect(profile.ua).not.toContain(profile.model);
+
+        const { metadata } = buildUserAgentMetadata(profile.ua, profile);
+        expect(metadata.model).toBe(profile.model);
+        expect(metadata.mobile).toBe(false);
+        expect(metadata.platformVersion).toBe(profile.platformVersion);
+    });
+
+    // "K" is Chrome's frozen placeholder in a reduced Android UA, never a device.
+    test('the UA placeholder is never reported as a model', () => {
+        const { metadata } = buildUserAgentMetadata(generateAndroidTabletUA());
+        expect(metadata.model).toBe('');
     });
 
     test('a tablet sends sec-ch-ua-mobile: ?0', () => {
@@ -176,14 +197,27 @@ describe('user agents can be pinned to the real browser version', () => {
     // Chromium 145 claiming to be 143 is a small lie; real Chrome 154 claiming
     // 143 is a large one, and feature detection does not lie — a page can see
     // APIs that the claimed version never shipped.
-    test('a runtime version drives the major and build of every UA', () => {
+    // The UA carries only the major — Chrome froze the rest at 0.0.0 — so the
+    // real build has to reach the hints through the profile instead.
+    test('a runtime version drives the major of every UA', () => {
         setRuntimeChromeVersion('154.0.8037.59');
         expect(getRuntimeChromeVersion()).toMatchObject({ major: '154', build: '8037' });
 
         for (const ua of getUserAgentList('Desktop', 50)) {
-            const m = ua.match(/Chrome\/(\d+)\.0\.(\d+)\./);
-            expect(m[1]).toBe('154');
-            expect(m[2]).toBe('8037');
+            expect(ua).toContain('Chrome/154.0.0.0');
+        }
+    });
+
+    // Chrome and Edge track the engine's build; Opera and Samsung Internet carry
+    // their own product versions, so the claim is made against Chrome itself.
+    test('the real build still reaches the profile, for the hints', () => {
+        setRuntimeChromeVersion('154.0.8037.59');
+        for (let i = 0; i < 25; i++) {
+            const profile = generateChromeProfile('desktop');
+            expect(profile.fullVersion.startsWith('154.0.8037.')).toBe(true);
+            // and it is deliberately absent from the UA
+            expect(profile.ua).not.toContain('8037');
+            expect(profile.ua).toContain('Chrome/154.0.0.0');
         }
     });
 
@@ -208,10 +242,19 @@ describe('user agents can be pinned to the real browser version', () => {
         expect(generateChromeUA('desktop')).toMatch(/Chrome\/\d+\.0\.\d+\.\d+ Safari/);
     });
 
-    test('the patch number still varies so visits are not identical', () => {
+    // Every current Chrome sends the same frozen version, so varying the UA's
+    // patch would make the traffic stand out rather than blend in. The variety
+    // belongs in the full version the hints report.
+    test('the UA version is identical across visits, as Chrome makes it', () => {
         setRuntimeChromeVersion('154.0.8037.59');
-        const patches = new Set(getUserAgentList('Desktop', 100)
-            .map(u => u.match(/Chrome\/\d+\.0\.\d+\.(\d+)/)[1]));
-        expect(patches.size).toBeGreaterThan(5);
+        const versions = new Set(getUserAgentList('Desktop', 100)
+            .map(u => u.match(/Chrome\/([\d.]+)/)[1]));
+        expect(versions).toEqual(new Set(['154.0.0.0']));
+    });
+
+    test('the full versions behind the hints do vary', () => {
+        setRuntimeChromeVersion('154.0.8037.59');
+        const fulls = new Set(getUserAgentProfiles('Desktop', 100).map(p => p.fullVersion));
+        expect(fulls.size).toBeGreaterThan(5);
     });
 });

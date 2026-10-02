@@ -11,7 +11,7 @@
 const { getLogger, initCampaignLogger, closeCampaignLogger, getCampaignLogDir } = require('../helpers/logger');
 const Constants = require('../helpers/constants');
 const { generateVisitsArray, calculateMetrics, shuffleArray } = require('../helpers/visits');
-const { getUserAgentList, getMatchingScreenSize, getMixedScreenSizes,
+const { getUserAgentList, getUserAgentProfiles, getMatchingScreenSize, getMixedScreenSizes,
         setRuntimeChromeVersion, isInconsistentDeviceType } = require('../helpers/userAgents');
 const { resolveBrowser } = require('../helpers/browserResolver');
 const { probeLanding } = require('../helpers/landingProbe');
@@ -182,7 +182,12 @@ class VisitLogic {
             logger.warn(`Device Type "${userAgentType}": Chromium always sends sec-ch-ua headers and a non-Chromium browser never does, so these user agents ship an empty brand list. GA4 cannot resolve that to a browser and will report "Mozilla". Use Default, Desktop, Mobile or Tablet for a browser GA4 can name.`);
         }
 
-        const userAgentList = getUserAgentList(userAgentType, 100);
+        // Profiles, not just strings: Chrome's UA reduction took the platform
+        // version and device model out of the UA string, so they travel
+        // alongside it and end up in the client hints — which is where GA4
+        // reads the device from.
+        const userAgentProfiles = getUserAgentProfiles(userAgentType, 100);
+        const userAgentList = userAgentProfiles.map(p => p.ua);
 
         // Resolve what each campaign URL lands on, once, before any visit runs.
         // A URL that ends on a file cannot produce a GA4 session, and attempting
@@ -296,6 +301,7 @@ class VisitLogic {
                     threadDelay,
                     memClear,
                     userAgentList,
+                    userAgentProfiles,
                     visitsList,
                     csvVisitsByUrl,
                     resolvedCsvRows,
@@ -348,6 +354,7 @@ class VisitLogic {
                     threadDelay,
                     memClear,
                     userAgentList,
+                    userAgentProfiles,
                     visitsList,
                     csvVisitsByUrl,
                     resolvedCsvRows,
@@ -430,7 +437,7 @@ class VisitLogic {
     async _runAutomaticMode(config) {
         const {
             urlList, refererList, isReferer, totalBatches, repeat, threads,
-            threadDelay, memClear, userAgentList, visitsList,
+            threadDelay, memClear, userAgentList, userAgentProfiles, visitsList,
             csvVisitsByUrl, resolvedCsvRows,
             screenSizes, oldUserFlags, restrictToPrimaryDomain,
             previousURL, useBaseUrlForOldUser, playMode, adsBlock, proxyEnabled, proxyUrl,
@@ -450,6 +457,10 @@ class VisitLogic {
             utmCampaign, utmTerm, utmContent,
             mixedDirect, mixedOrganic, mixedReferral, mixedSocial
         } : null;
+
+        // A caller may hand over only UA strings; derive placeholder profiles
+        // so the pairing below never indexes undefined.
+        const uaProfiles = userAgentProfiles || userAgentList.map(ua => ({ ua }));
 
         const queue = await this._createQueue(threads);
 
@@ -506,6 +517,7 @@ class VisitLogic {
 
             let shuffledUA = [];
             let shuffledScreens = [];
+            let shuffledProfiles = [];
             let shuffledOldUser = [];
             let shuffledReferers = [];
             let globalVisitIndex = 0;
@@ -515,10 +527,11 @@ class VisitLogic {
                 // the interleaved stream — preserves the diversity guarantees
                 // of the previous per-batch shuffle.
                 if (slotIdx % 100 === 0) {
-                    const paired = userAgentList.map((ua, idx) => ({ ua, screen: screenSizes[idx] }));
+                    const paired = userAgentList.map((ua, idx) => ({ ua, screen: screenSizes[idx], profile: uaProfiles[idx] }));
                     const shuffledPairs = shuffleArray(paired);
                     shuffledUA = shuffledPairs.map(p => p.ua);
                     shuffledScreens = shuffledPairs.map(p => p.screen);
+                    shuffledProfiles = shuffledPairs.map(p => p.profile);
                     shuffledOldUser = shuffleArray(oldUserFlags);
                     shuffledReferers = shuffleArray(refererList);
                 }
@@ -542,6 +555,7 @@ class VisitLogic {
                     userAgent: shuffledUA[localIdx],
                     visit,
                     screenSize: shuffledScreens[localIdx],
+                    userAgentProfile: shuffledProfiles[localIdx],
                     isOldUserFlag: shuffledOldUser[localIdx % shuffledOldUser.length],
                 };
                 queue.add(() => this._executeVisitTask(params));
@@ -551,10 +565,11 @@ class VisitLogic {
             for (let batchNum = 0; batchNum < totalBatches; batchNum++) {
                 if (!this.isRunning) break;
 
-                const paired = userAgentList.map((ua, idx) => ({ ua, screen: screenSizes[idx] }));
+                const paired = userAgentList.map((ua, idx) => ({ ua, screen: screenSizes[idx], profile: uaProfiles[idx] }));
                 const shuffledPairs = shuffleArray(paired);
                 const shuffledUA = shuffledPairs.map(p => p.ua);
                 const shuffledScreens = shuffledPairs.map(p => p.screen);
+                const shuffledProfiles = shuffledPairs.map(p => p.profile);
                 const shuffledVisits = shuffleArray(visitsList);
                 const shuffledOldUser = shuffleArray(oldUserFlags);
                 const shuffledReferers = shuffleArray(refererList);
@@ -581,6 +596,7 @@ class VisitLogic {
                             userAgent: shuffledUA[i],
                             visit: shuffledVisits[i],
                             screenSize: shuffledScreens[i],
+                            userAgentProfile: shuffledProfiles[i],
                             isOldUserFlag: shuffledOldUser[i],
                         };
                         queue.add(() => this._executeVisitTask(params));
@@ -598,7 +614,7 @@ class VisitLogic {
     async _executeVisitTask(params) {
         const {
             visitIndex, campaignUrl, legacyReferer,
-            userAgent, visit, screenSize, isOldUserFlag,
+            userAgent, userAgentProfile, visit, screenSize, isOldUserFlag,
             trafficSourceConfig, isReferer, threadDelay, memClear,
             restrictToPrimaryDomain, previousURL, useBaseUrlForOldUser,
             playMode, adsBlock, proxyEnabled, proxyList, proxyUrl,
@@ -664,6 +680,7 @@ class VisitLogic {
             isReferer: resolvedIsReferer,
             visitReferer: resolvedVisitReferer,
             userAgent,
+            userAgentProfile,
             threadId: visitIndex,
             visit,
             screenSize,
@@ -740,7 +757,7 @@ class VisitLogic {
     async _runManualMode(config) {
         const {
             urlList, refererList, isReferer, totalBatches, repeat, threads,
-            threadDelay, memClear, userAgentList, screenSizes,
+            threadDelay, memClear, userAgentList, userAgentProfiles, screenSizes,
             visitsList, csvVisitsByUrl, resolvedCsvRows,
             oldUserFlags, restrictToPrimaryDomain, previousURL, useBaseUrlForOldUser,
             avgSessionDuration,
@@ -754,6 +771,10 @@ class VisitLogic {
             socialPlatforms, utmSource, utmMedium, utmCampaign, utmTerm, utmContent,
             mixedDirect, mixedOrganic, mixedReferral, mixedSocial,
         } = config;
+
+        // A caller may hand over only UA strings; derive placeholder profiles
+        // so the pairing below never indexes undefined.
+        const uaProfiles = userAgentProfiles || userAgentList.map(ua => ({ ua }));
 
         const queue = await this._createQueue(threads);
         this.queue = queue;  // Store reference for stop()
@@ -828,6 +849,7 @@ class VisitLogic {
 
             let shuffledUA = [];
             let shuffledScreens = [];
+            let shuffledProfiles = [];
             let shuffledReferers = [];
             let shuffledOldUser = [];
             let globalVisitIndex = 0;
@@ -837,10 +859,11 @@ class VisitLogic {
                 // diversity guarantees from the previous per-batch shuffle are
                 // preserved across the interleaved stream.
                 if (slotIdx % 100 === 0) {
-                    const paired = userAgentList.map((ua, idx) => ({ ua, screen: screenSizes[idx] }));
+                    const paired = userAgentList.map((ua, idx) => ({ ua, screen: screenSizes[idx], profile: uaProfiles[idx] }));
                     const shuffledPairs = shuffleArray(paired);
                     shuffledUA = shuffledPairs.map(p => p.ua);
                     shuffledScreens = shuffledPairs.map(p => p.screen);
+                    shuffledProfiles = shuffledPairs.map(p => p.profile);
                     shuffledReferers = shuffleArray(refererList);
                     shuffledOldUser = shuffleArray(safeOldUserFlags);
                 }
@@ -854,6 +877,7 @@ class VisitLogic {
                     referer: shuffledReferers[localIdx % shuffledReferers.length],
                     userAgent: shuffledUA[localIdx],
                     screenSize: shuffledScreens[localIdx],
+                    userAgentProfile: shuffledProfiles[localIdx],
                     isOldUserFlag: shuffledOldUser[localIdx % shuffledOldUser.length],
                 };
                 queue.add(() => this._executeManualTask(params));
@@ -862,10 +886,11 @@ class VisitLogic {
             for (let batchNum = 0; batchNum < totalBatches; batchNum++) {
                 if (!this.isRunning) break;
 
-                const pairedM = userAgentList.map((ua, idx) => ({ ua, screen: screenSizes[idx] }));
+                const pairedM = userAgentList.map((ua, idx) => ({ ua, screen: screenSizes[idx], profile: uaProfiles[idx] }));
                 const shuffledPairsM = shuffleArray(pairedM);
                 const shuffledUA = shuffledPairsM.map(p => p.ua);
                 const shuffledScreens = shuffledPairsM.map(p => p.screen);
+                const shuffledProfiles = shuffledPairsM.map(p => p.profile);
                 const shuffledReferers = shuffleArray(refererList);
                 const shuffledOldUser = shuffleArray(safeOldUserFlags);
 
@@ -885,6 +910,7 @@ class VisitLogic {
                             referer: shuffledReferers[i % shuffledReferers.length],
                             userAgent: shuffledUA[i],
                             screenSize: shuffledScreens[i],
+                            userAgentProfile: shuffledProfiles[i],
                             isOldUserFlag: shuffledOldUser[i],
                         };
                         queue.add(() => this._executeManualTask(params));
@@ -901,7 +927,7 @@ class VisitLogic {
      */
     async _executeManualTask(params) {
         const {
-            visitIndex, url, referer, userAgent, screenSize,
+            visitIndex, url, referer, userAgent, userAgentProfile, screenSize,
             isReferer, threadDelay, memClear,
             playMode, adsBlock, inputCommands, location,
             extensionEnabled, extensionPath, extensionProfilePool,
@@ -963,6 +989,7 @@ class VisitLogic {
             isReferer: resolvedIsReferer,
             visitReferer: resolvedVisitReferer,
             userAgent,
+            userAgentProfile,
             threadId: visitIndex,
             screenSize,
             playMode,

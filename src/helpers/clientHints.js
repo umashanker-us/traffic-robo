@@ -60,10 +60,14 @@ function isMobileUserAgent(ua) {
 function parsePlatform(ua) {
     let match = ua.match(/Android (\d+(?:\.\d+)*);\s*([^)]+?)\)/);
     if (match) {
+        const model = match[2].trim();
         return {
             platform: 'Android',
             platformVersion: `${match[1]}.0.0`.split('.').slice(0, 3).join('.'),
-            model: match[2].trim(),
+            // A reduced Android UA says "Android 10; K" — "K" is Chrome's frozen
+            // placeholder, not a device. Reporting it as the model would be a
+            // tell, so without a profile there is simply no model to report.
+            model: model === 'K' ? '' : model,
             // Tablets report no architecture either — they are not desktops.
             desktop: false,
         };
@@ -161,9 +165,25 @@ function buildBrands(ua) {
  * @param {string} userAgent
  * @returns {{metadata: Object, isChromium: boolean}}
  */
-function buildUserAgentMetadata(userAgent) {
-    const mobile = isMobileUserAgent(userAgent);
-    const platformInfo = parsePlatform(userAgent);
+function buildUserAgentMetadata(userAgent, profile = null) {
+    // Chrome's UA reduction froze the platform in the UA string and removed the
+    // device model from it entirely, so the UA can no longer be the source for
+    // either. When the generator hands over a profile, that is the truth; the
+    // UA is only parsed as a fallback for callers that have no profile.
+    const mobile = profile && typeof profile.mobile === 'boolean'
+        ? profile.mobile
+        : isMobileUserAgent(userAgent);
+
+    const parsed = parsePlatform(userAgent);
+    const platformInfo = profile && profile.platform
+        ? {
+            platform: profile.platform,
+            platformVersion: profile.platformVersion || parsed.platformVersion,
+            model: profile.model || '',
+            desktop: profile.platform === 'Windows' || profile.platform === 'macOS',
+        }
+        : parsed;
+
     const brandInfo = isChromiumUA(userAgent) ? buildBrands(userAgent) : null;
 
     if (!brandInfo) {

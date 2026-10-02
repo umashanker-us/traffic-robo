@@ -21,7 +21,8 @@ const {
     resetResolvedBrowser,
 } = require('../src/helpers/browserResolver');
 
-const { setRuntimeChromeVersion, getRuntimeChromeVersion, generateChromeUA } = require('../src/helpers/userAgents');
+const { setRuntimeChromeVersion, getRuntimeChromeVersion, generateChromeUA,
+        generateChromeProfile } = require('../src/helpers/userAgents');
 
 afterEach(() => {
     resetResolvedBrowser();
@@ -124,9 +125,15 @@ describe('the resolved version reaches the user agents', () => {
         expect(getRuntimeChromeVersion()).toMatchObject({ major, build });
 
         for (let i = 0; i < 25; i++) {
-            const m = generateChromeUA('desktop').match(/Chrome\/(\d+)\.0\.(\d+)\./);
-            expect(m[1]).toBe(major);
-            expect(m[2]).toBe(build);
+            // The UA carries the major plus Chrome's frozen 0.0.0; the real
+            // build reaches the client hints through the profile instead.
+            expect(generateChromeUA('desktop')).toContain(`Chrome/${major}.0.0.0`);
+        }
+        // Chrome and Edge track the engine's build; Opera and Samsung Internet
+        // carry their own product versions, so this is asserted on Chrome.
+        for (let i = 0; i < 10; i++) {
+            expect(generateChromeProfile('desktop').fullVersion
+                .startsWith(`${major}.0.${build}.`)).toBe(true);
         }
     });
 });
