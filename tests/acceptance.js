@@ -28,7 +28,11 @@ const { generateCSV, generateJSON } = require('../src/helpers/campaignExport');
 const { getResolvedBrowser } = require('../src/helpers/browserResolver');
 const { resolveTrackerChain, parseProxyString } = require('../src/helpers/proxyRouter');
 
-const SITE = process.argv[2] || 'https://example.com';
+// example.com carries no analytics at all, so defaulting to it made three
+// checks — beacons sent, UA version vs engine, GA4 event names — impossible
+// to pass and the suite reported 18/21 on a healthy build. The default has to
+// be a site that actually runs GA4. Pass another as argv[2] to override.
+const SITE = process.argv[2] || 'https://carnbikecafe.com';
 const FILE_URL = process.argv[3] || 'https://e4mevents.com/smartlink/s/A5Tdts';
 const EXT = path.join(__dirname, '..', 'extensions', 'similarweb');
 const VISITS = 6;

@@ -65,7 +65,39 @@ function getDebugAllTracking() {
     return debugAllTracking;
 }
 
+/**
+ * Is this tab the extension's own, rather than part of the campaign?
+ *
+ * The SimilarWeb extension opens a welcome tab of its own on install and after
+ * consent. Those tabs belong to it, not to the visit, so they are closed on
+ * sight — a real user would never see them in a simulated session.
+ *
+ * chrome-error:// counts because the tab the extension opened here never
+ * resolves: this ISP DNS-blocks www.similarweb.com (202.56.230.30, TCP times
+ * out) while similarweb.com, rank. and data. all resolve to AWS and connect in
+ * under 600ms. The tab that showed up on screen was its error page.
+ *
+ * Subdomain-anchored so an unrelated host that merely ends in the same letters
+ * (notsimilarweb.com) is left alone.
+ *
+ * @param {string} url
+ * @returns {boolean}
+ */
+function isExtensionOwnPage(url) {
+    if (!url || typeof url !== 'string') return false;
+    if (url.startsWith('chrome-extension://')) return true;
+    if (url.startsWith('chrome-error://')) return true;
+    try {
+        return /(^|\.)similarweb\.com$|(^|\.)similargroup\.com$/.test(new URL(url).hostname);
+    } catch {
+        return false;
+    }
+}
+
 class BrowserSession {
+    // Identity sentinel for _withDeadline; never a value a page can return.
+    static _EXPIRED = Symbol('deadline-expired');
+
     constructor(config) {
         // Automatic mode calls the target campaignUrl, manual mode calls it
         // url; the base works off targetUrl so shared code needs no branch.
@@ -483,27 +515,48 @@ class BrowserSession {
             // answers on 443) and lands on an error page that then sits there.
             // Every other SimilarWeb host used for reporting still works, so the
             // tab is cosmetic — but it should not linger.
-            const isExtensionOwnPage = (url) => {
-                if (!url) return false;
-                if (url.startsWith('chrome-extension://')) return true;
-                if (url.startsWith('chrome-error://')) return true;
-                try {
-                    return /(^|\.)similarweb\.com$|(^|\.)similargroup\.com$/.test(new URL(url).hostname);
-                } catch {
-                    return false;
-                }
+            // Closed on the first sign of where the tab is going, not after it
+            // loads. Waiting for 'commit' is what let the blocked
+            // www.similarweb.com tab sit on screen for ~20s until its
+            // connection timed out and the error page finally committed. A
+            // navigation request names the target immediately.
+            const closeIfExtensionOwn = (page, url) => {
+                if (this._grantingConsent) return;
+                if (page === this.page) return;           // never the campaign page
+                if (!isExtensionOwnPage(url)) return;
+                page.close().catch(() => {});
             };
 
-            this.context.on('page', async (page) => {
+            this.context.on('page', (page) => {
                 try {
-                    await page.waitForLoadState('commit').catch(() => {});
-                    if (this._grantingConsent) return;
-                    // Never the campaign page, whatever it ended up showing.
-                    if (page === this.page) return;
-                    if (isExtensionOwnPage(page.url())) {
-                        await page.close().catch(() => {});
-                    }
-                } catch {}
+                    // Already identifiable (an options or extension page).
+                    closeIfExtensionOwn(page, page.url());
+
+                    // Opened blank, then navigated: the request names the target
+                    // before any response comes back.
+                    page.on('request', (request) => {
+                        try {
+                            if (!request.isNavigationRequest()) return;
+                            if (request.frame() !== page.mainFrame()) return;
+                            closeIfExtensionOwn(page, request.url());
+                        } catch {
+                            // page already closing
+                        }
+                    });
+
+                    // Backstop for navigations with no request we can see
+                    // (an error page committing, a client-side redirect).
+                    page.on('framenavigated', (frame) => {
+                        try {
+                            if (frame !== page.mainFrame()) return;
+                            closeIfExtensionOwn(page, frame.url());
+                        } catch {
+                            // page already closing
+                        }
+                    });
+                } catch {
+                    // A page that vanishes before we attach needs nothing.
+                }
             });
 
             // The extension reports nothing until consent is granted, and the
@@ -1236,6 +1289,92 @@ class BrowserSession {
         }
     }
     /**
+     * Run a browser call under a hard deadline.
+     *
+     * Playwright times out navigations and selector waits, but puts no timeout
+     * at all on page.evaluate or page.mouse.*: on a page whose JS main thread
+     * has wedged they hang for as long as the browser lives. Measured on a live
+     * 100-visit run — one visit sat 494s inside its behaviour phase on a heavy
+     * page and held a worker slot the entire time, then reported "Target page,
+     * context or browser has been closed" once the campaign ended.
+     *
+     * A miss is not worth failing the visit over: the page has loaded, GA4
+     * already has its beacon, and the behaviour on top is cosmetic. So the call
+     * is abandoned and the caller moves on.
+     *
+     * @param {string} label - what is being waited on, for the log
+     * @param {number} ms
+     * @param {Function} run - returns the promise to race
+     * @returns {Promise<{ok: boolean, value: *}>}
+     */
+    async _withDeadline(label, ms, run) {
+        const EXPIRED = BrowserSession._EXPIRED;
+        let timer = null;
+        try {
+            const pending = run();
+            // The abandoned call still settles later; without this its
+            // rejection would surface as an unhandled rejection.
+            if (pending && typeof pending.catch === 'function') pending.catch(() => {});
+
+            const value = await Promise.race([
+                pending,
+                new Promise((resolve) => { timer = setTimeout(() => resolve(EXPIRED), ms); }),
+            ]);
+
+            if (value === EXPIRED) {
+                this._deadlineMisses = (this._deadlineMisses || 0) + 1;
+                this.logger.warn(`${label} did not return within ${ms}ms — the page has stopped responding, moving on`);
+                if (this.replay) this.replay.logError('deadline', `${label} exceeded ${ms}ms`);
+                return { ok: false, value: undefined };
+            }
+            return { ok: true, value };
+        } catch (error) {
+            this.logger.debug(`${label} failed: ${error.message}`);
+            return { ok: false, value: undefined };
+        } finally {
+            if (timer) clearTimeout(timer);
+        }
+    }
+
+    /**
+     * The absolute ceiling for one visit, in ms.
+     *
+     * Deliberately far above anything a healthy visit needs — page loads, GA4
+     * waits and the extension's own startup all sit on top of the planned time,
+     * so this must never fire on a working visit. It exists only to break a
+     * hang that the per-call deadlines did not cover.
+     */
+    _visitCeilingMs() {
+        const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+        let pages = 1;
+        let perPage = 0;
+        let session = 0;
+        try {
+            pages = Math.max(1, num(this.visit && this.visit.getPagePerSession && this.visit.getPagePerSession()) || 1);
+            perPage = Math.max(0, num(this.visit && this.visit.getWaitTimePerPageMs && this.visit.getWaitTimePerPageMs()));
+            session = Math.max(0, num(this.visit && this.visit.getAvgSessionDuration && this.visit.getAvgSessionDuration()) * 1000);
+        } catch {
+            // A visit object that cannot answer gets the floor below.
+        }
+        const planned = Math.max(session, perPage * pages) + Math.max(0, num(this.randomWaitMs));
+        return Math.min(15 * 60 * 1000, Math.max(3 * 60 * 1000, planned * 3 + 90 * 1000));
+    }
+
+    /**
+     * Start the ceiling timer. Returns a function that stops it.
+     */
+    _startVisitWatchdog() {
+        const ceilingMs = this._visitCeilingMs();
+        const timer = setTimeout(() => {
+            this.logger.warn(`⏱ Visit passed its ${Math.round(ceilingMs / 1000)}s ceiling — closing the browser so the thread is released`);
+            if (this.replay) this.replay.logError('watchdog', `visit exceeded its ${ceilingMs}ms ceiling`);
+            this.forceClose().catch(() => {});
+        }, ceilingMs);
+        if (timer.unref) timer.unref();      // never hold the process open
+        return () => clearTimeout(timer);
+    }
+
+    /**
      * Sleep helper - exact milliseconds
      */
     async _sleep(ms) {
@@ -1416,3 +1555,4 @@ module.exports.setDebugAllTracking = setDebugAllTracking;
 module.exports.getDebugAllTracking = getDebugAllTracking;
 module.exports.isTrackingRequest = isTrackingRequest;
 module.exports.TRACKING_PATTERNS = TRACKING_PATTERNS;
+module.exports.isExtensionOwnPage = isExtensionOwnPage;

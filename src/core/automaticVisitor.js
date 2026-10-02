@@ -24,6 +24,14 @@ const { isGACollectRequest, matchesCustomProxyPattern, resolveTrackerChain } = r
 const { SessionReplay } = require('../helpers/sessionReplay');
 const BrowserSession = require('./browserSession');
 
+// Playwright has no timeout of its own on page.evaluate or page.mouse.*, so a
+// page whose JS main thread has wedged hangs them for as long as the browser
+// lives. Measured on a live run: one visit sat 494s in its behaviour phase and
+// held a worker slot throughout. These are the ceilings for a renderer that is
+// merely busy — a healthy page answers any of them in single-digit ms.
+const ACTION_TIMEOUT_MS = 5000;
+const LINK_TIMEOUT_MS = 10000;
+
 class AutomaticVisitor extends BrowserSession {
     constructor(config) {
         super(config);
@@ -69,6 +77,9 @@ class AutomaticVisitor extends BrowserSession {
      */
     async execute() {
         const startTime = Date.now();
+        // Nothing may hold a worker slot indefinitely. The per-call deadlines
+        // below cover the calls that hang in practice; this covers the rest.
+        const stopWatchdog = this._startVisitWatchdog();
 
         // Initialize session replay
         this.replay = new SessionReplay(this.threadId, { maxEvents: 200 });
@@ -243,6 +254,7 @@ class AutomaticVisitor extends BrowserSession {
             this.logger.error(`Visit failed: ${error.message}`);
             throw error;
         } finally {
+            stopWatchdog();
             // CRITICAL: Extract cookies BEFORE closing context — context.cookies()
             // returns empty after close, which was causing "COOKIE JAR: EMPTY" bug
             await this._extractCookiesBeforeClose();
@@ -397,17 +409,17 @@ class AutomaticVisitor extends BrowserSession {
     async _simulateQuickGlance() {
         try {
             // Quick mouse movement
-            await this.page.mouse.move(
+            await this._withDeadline('Glance mouse move', ACTION_TIMEOUT_MS, () => this.page.mouse.move(
                 100 + Math.random() * 200,
                 100 + Math.random() * 150
-            );
+            ));
             await this._sleep(300);
             
             // Maybe a small scroll
             if (Math.random() > 0.5) {
-                await this.page.evaluate(() => {
+                await this._withDeadline('Glance scroll', ACTION_TIMEOUT_MS, () => this.page.evaluate(() => {
                     window.scrollBy({ top: 200 + Math.random() * 300, behavior: 'auto' });
-                });
+                }));
             }
         } catch (e) {
             // Ignore errors
@@ -517,7 +529,7 @@ class AutomaticVisitor extends BrowserSession {
             const currentUrl = this.page.url();
             const currentHost = new URL(currentUrl).host;
 
-            const links = await this.page.evaluate(({ currentHost, restrictToPrimary, primaryDomain }) => {
+            const harvest = await this._withDeadline('Link harvest', LINK_TIMEOUT_MS, () => this.page.evaluate(({ currentHost, restrictToPrimary, primaryDomain }) => {
                 const anchors = document.querySelectorAll('a[href]');
                 const validLinks = [];
 
@@ -566,9 +578,11 @@ class AutomaticVisitor extends BrowserSession {
                 currentHost, 
                 restrictToPrimary: this.restrictToPrimaryDomain,
                 primaryDomain: this.primaryDomain 
-            });
+            }));
 
-            return links;
+            // No links is already a handled outcome upstream — the visit ends
+            // after this page rather than waiting on a page that never answers.
+            return harvest.ok ? (harvest.value || []) : [];
 
         } catch (error) {
             this.logger.warn(`Failed to get links: ${error.message}`);
@@ -644,7 +658,7 @@ class AutomaticVisitor extends BrowserSession {
         let gaDetected = false;
         let gaDetails = {};
         try {
-            gaDetails = await this.page.evaluate(() => {
+            const probe = await this._withDeadline('GA4 probe', ACTION_TIMEOUT_MS, () => this.page.evaluate(() => {
                 return {
                     hasGtag: !!window.gtag,
                     hasDataLayer: !!window.dataLayer,
@@ -656,7 +670,8 @@ class AutomaticVisitor extends BrowserSession {
                         document.querySelector('script[src*="gtag/js"]')
                     ),
                 };
-            });
+            }));
+            gaDetails = probe.value || {};
             gaDetected = gaDetails.hasGtag || gaDetails.hasDataLayer || gaDetails.hasGA ||
                          gaDetails.hasGTM || gaDetails.hasScript;
         } catch (e) {
@@ -728,7 +743,7 @@ class AutomaticVisitor extends BrowserSession {
 
         while (Date.now() - startTime < maxPollTime && remainingTotalBudget() > 1000) {
             try {
-                gaDetails = await this.page.evaluate(() => {
+                const probe = await this._withDeadline('GA4 probe', ACTION_TIMEOUT_MS, () => this.page.evaluate(() => {
                     return {
                         hasGtag: !!window.gtag,
                         hasDataLayer: !!window.dataLayer,
@@ -740,7 +755,8 @@ class AutomaticVisitor extends BrowserSession {
                             document.querySelector('script[src*="gtag/js"]')
                         ),
                     };
-                });
+                }));
+                gaDetails = probe.value || {};
                 gaDetected = gaDetails.hasGtag || gaDetails.hasDataLayer || gaDetails.hasGA ||
                              gaDetails.hasGTM || gaDetails.hasScript;
                 if (gaDetected) break;
@@ -829,26 +845,33 @@ class AutomaticVisitor extends BrowserSession {
     async _simulateScrolling(scale = 1.0, pause = null) {
         const wait = pause || ((ms) => this._sleep(ms));
         try {
+            // page.evaluate has no timeout of its own, and a wedged renderer
+            // never answers it. Returns false when the page stopped responding,
+            // so the rest of the sequence is abandoned rather than hanging on
+            // each remaining scroll in turn.
             const scrollBy = async (amount) => {
-                await this.page.evaluate((px) => {
-                    window.scrollBy({ top: px, behavior: 'smooth' });
-                }, amount);
+                const done = await this._withDeadline('Scroll', ACTION_TIMEOUT_MS,
+                    () => this.page.evaluate((px) => {
+                        window.scrollBy({ top: px, behavior: 'smooth' });
+                    }, amount));
+                if (!done.ok) return false;
                 // scrollEvents in the report used to be permanently 0 because
                 // nothing recorded the scrolls this method performs.
                 if (this.replay) this.replay.logBehavior('scroll', { px: amount });
+                return true;
             };
 
-            await scrollBy(300 + Math.floor(Math.random() * 400));
+            if (!await scrollBy(300 + Math.floor(Math.random() * 400))) return;
             await wait(Math.floor((800 + Math.random() * 600) * scale));
 
-            await scrollBy(500 + Math.floor(Math.random() * 700));
+            if (!await scrollBy(500 + Math.floor(Math.random() * 700))) return;
             await wait(Math.floor((600 + Math.random() * 500) * scale));
 
             if (scale > 0.5 && Math.random() > 0.3) {
                 const scroll3 = Math.random() > 0.5
                     ? (400 + Math.floor(Math.random() * 600))
                     : -(200 + Math.floor(Math.random() * 300));
-                await scrollBy(scroll3);
+                if (!await scrollBy(scroll3)) return;
                 await wait(Math.floor((400 + Math.random() * 400) * scale));
             }
 
@@ -866,8 +889,17 @@ class AutomaticVisitor extends BrowserSession {
             // Start position
             const startX = 100 + Math.floor(Math.random() * 200);
             const startY = 100 + Math.floor(Math.random() * 150);
-            await this.page.mouse.move(startX, startY);
-            if (this.replay) this.replay.logBehavior('mouse_move', { x: startX, y: startY });
+            // Dispatched through the renderer, so on a wedged page it hangs
+            // exactly the way page.evaluate does.
+            const moveTo = async (x, y, opts) => {
+                const done = await this._withDeadline('Mouse move', ACTION_TIMEOUT_MS,
+                    () => this.page.mouse.move(x, y, opts));
+                if (!done.ok) return false;
+                if (this.replay) this.replay.logBehavior('mouse_move', { x, y });
+                return true;
+            };
+
+            if (!await moveTo(startX, startY)) return;
             await wait(200 + Math.random() * 200);
             
             // Move around (2-3 movements)
@@ -875,8 +907,7 @@ class AutomaticVisitor extends BrowserSession {
             for (let i = 0; i < moves; i++) {
                 const x = 100 + Math.floor(Math.random() * 500);
                 const y = 100 + Math.floor(Math.random() * 400);
-                await this.page.mouse.move(x, y, { steps: 5 + Math.floor(Math.random() * 5) });
-                if (this.replay) this.replay.logBehavior('mouse_move', { x, y });
+                if (!await moveTo(x, y, { steps: 5 + Math.floor(Math.random() * 5) })) return;
                 await wait(150 + Math.random() * 200);
             }
             

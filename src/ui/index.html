@@ -1094,7 +1094,7 @@ googleads.g.doubleclick.net"
                     <div class="form-group" style="flex: 0 0 auto;">
                         <label>Profile pool</label>
                         <div style="display: flex; gap: 8px; align-items: center;">
-                            <input type="number" id="extensionProfilePool" min="0" max="64" value="0" disabled
+                            <input type="number" id="extensionProfilePool" min="0" max="64" value="5" disabled
                                    style="width: 72px;" onchange="describeProfilePool()">
                             <button class="btn btn-secondary" id="resetProfilesBtn" onclick="resetExtensionProfiles()"
                                     disabled style="flex: none; padding: 6px 12px;">♻️ Reset</button>
@@ -1649,7 +1649,7 @@ googleads.g.doubleclick.net"
                 // Extension settings - NEW
                 extensionEnabled: document.getElementById('extensionEnabled').checked,
                 extensionPath: document.getElementById('extensionPath').value,
-                extensionProfilePool: parseInt(document.getElementById('extensionProfilePool').value) || 0,
+                extensionProfilePool: profilePoolForRun(),
                 // IP Rotation - NEW v2.4
                 ipRotation: document.getElementById('ipRotation').checked,
                 // Fast Mode
@@ -1738,6 +1738,9 @@ googleads.g.doubleclick.net"
             if (config.extensionProfilePool !== undefined) {
                 document.getElementById('extensionProfilePool').value = config.extensionProfilePool;
             }
+            // A config saved before the pool existed, or saved with 0, would
+            // otherwise reinstate the throwaway profile here.
+            ensureProfilePoolSane();
             describeProfilePool();
             describeDeviceType();
             // IP Rotation - NEW v2.4
@@ -1841,6 +1844,41 @@ googleads.g.doubleclick.net"
         // Toggle extension settings visibility - NEW
         // Explains what the pool number actually does, because 0 silently means
         // "the extension accumulates nothing" — the cause of empty SimilarWeb reports.
+        /**
+         * The profile pool a run should use.
+         *
+         * A pool of 0 gives every visit a throwaway profile, so the extension is
+         * reinstalled each time and keeps nothing — no consent, no history, and
+         * its welcome tab opening on every single visit. It was also the stored
+         * default, which meant ticking "extension" and changing nothing produced
+         * an extension that reported nothing at all.
+         *
+         * 0 stays available deliberately (it is the old behaviour, and useful
+         * when you want no persistence), but it is never what a run falls back
+         * to by accident.
+         */
+        function profilePoolForRun() {
+            const asked = parseInt(document.getElementById('extensionProfilePool').value) || 0;
+            if (!document.getElementById('extensionEnabled').checked) return asked;
+            if (asked > 0) return asked;
+
+            const threads = parseInt(document.getElementById('threads').value) || 1;
+            addLog('info', 'Profile pool was 0 — using ' + threads + ' reusable profile'
+                + (threads === 1 ? '' : 's') + ' so the extension keeps its consent and history'
+                + ' (set it back to 0 only if you want a throwaway profile per visit)');
+            document.getElementById('extensionProfilePool').value = threads;
+            describeProfilePool();
+            return threads;
+        }
+
+        /** Bring an enabled extension off a 0 pool, so the field shows what will run. */
+        function ensureProfilePoolSane() {
+            if (!document.getElementById('extensionEnabled').checked) return;
+            if ((parseInt(document.getElementById('extensionProfilePool').value) || 0) > 0) return;
+            const threads = parseInt(document.getElementById('threads').value) || 1;
+            document.getElementById('extensionProfilePool').value = threads;
+        }
+
         function describeProfilePool() {
             const el = document.getElementById('extensionProfilePool');
             const hint = document.getElementById('profilePoolHint');
@@ -1854,6 +1892,27 @@ googleads.g.doubleclick.net"
                     + ' — the extension looks like ' + n + ' device' + (n === 1 ? '' : 's')
                     + ' that browse repeatedly, so its history accumulates. Match this to your thread count.'
                     + ' GA4 new/returning stays correct: GA cookies are cleared on a reused profile.';
+            }
+            showProfilePoolStats(hint);
+        }
+
+        /**
+         * Append what the pool currently holds on disk.
+         *
+         * The channel for this was already exposed and handled, but nothing
+         * ever called it — so the Reset button gave no sign of having worked.
+         */
+        async function showProfilePoolStats(hint) {
+            try {
+                const stats = await api.getExtensionProfileStats();
+                if (!stats || !hint) return;
+                const held = stats.total || 0;
+                hint.innerHTML += '<br><span style="opacity: 0.75;">On disk now: '
+                    + held + ' profile' + (held === 1 ? '' : 's')
+                    + (stats.busy ? ', ' + stats.busy + ' in use' : '')
+                    + '</span>';
+            } catch {
+                // Stats are a nicety; never let them break the hint.
             }
         }
 
@@ -1878,6 +1937,7 @@ googleads.g.doubleclick.net"
             downloadBtn.disabled = !enabled;
             document.getElementById('extensionProfilePool').disabled = !enabled;
             document.getElementById('resetProfilesBtn').disabled = !enabled;
+            if (enabled) ensureProfilePoolSane();
             describeProfilePool();
 
             if (enabled) {
