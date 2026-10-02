@@ -16,6 +16,7 @@ const { getUserAgentList, getUserAgentProfiles, getMatchingScreenSize, getMixedS
 const { resolveBrowser } = require('../helpers/browserResolver');
 const { probeLanding } = require('../helpers/landingProbe');
 const profilePool = require('../helpers/profilePool');
+const { warmUpProfiles } = require('../helpers/profileWarmup');
 const { buildUserAgentMetadata, buildClientHintHeaders } = require('../helpers/clientHints');
 
 /**
@@ -218,6 +219,33 @@ class VisitLogic {
                 } catch {
                     // Version directory not readable; skip the comparison.
                 }
+            }
+
+            // Grant each pooled profile its consent now, rather than inside the
+            // first visit that happens to use it.
+            //
+            // A profile's first visit used to pay for consent itself: the
+            // options page opened in that visit's browser and sat there ~2.5s
+            // while the control was ticked and verified, and the extension
+            // answered by opening its own welcome tab. All of it landed on top
+            // of a real visit — the one whose page load, GA4 beacon and ad flow
+            // actually matter. Up front it costs the same total time and none of
+            // the visits.
+            //
+            // Repeating it is free: a profile that already carries the consent
+            // marker is skipped without launching anything.
+            if (pool > 0) {
+                const binaryOptions = browserInfo.channel
+                    ? { channel: browserInfo.channel }
+                    : (browserInfo.executablePath ? { executablePath: browserInfo.executablePath } : {});
+
+                await warmUpProfiles({
+                    poolSize: pool,
+                    extensionPath,
+                    binaryOptions,
+                    logger,
+                    shouldStop: () => !this.isRunning,
+                });
             }
         }
 
