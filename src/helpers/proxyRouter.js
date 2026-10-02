@@ -94,8 +94,54 @@ function parseCustomProxyPatterns(raw) {
  * chain is checked independently, so a multi-step redirect with all hops
  * matching the patterns gets every hop proxied.
  */
+// Extensions that are never a tracker hop and can be large. Images, .js and
+// .css stay matchable: a 1x1 impression pixel is often a .gif or .png and does
+// need the proxy IP for attribution, and those are all small.
+const NEVER_PROXY_EXTENSIONS = [
+    '.pdf', '.zip', '.rar', '.7z', '.tar', '.gz', '.bz2', '.iso',
+    '.exe', '.msi', '.dmg', '.pkg', '.apk', '.deb', '.rpm',
+    '.mp4', '.webm', '.mov', '.avi', '.mkv', '.m4v', '.flv',
+    '.mp3', '.wav', '.flac', '.aac', '.ogg', '.m4a',
+    '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.odt', '.ods',
+    '.woff', '.woff2', '.ttf', '.otf', '.eot',
+];
+
+/**
+ * Is this URL a file download rather than a tracker hop?
+ *
+ * Judged on the path's extension only, so a query string carrying a click id
+ * cannot make a .pdf look like a tracker.
+ *
+ * @param {string} url
+ * @returns {boolean}
+ */
+function isFileDownloadUrl(url) {
+    let pathname;
+    try {
+        pathname = new URL(url).pathname.toLowerCase();
+    } catch {
+        return false;
+    }
+    return NEVER_PROXY_EXTENSIONS.some(ext => pathname.endsWith(ext));
+}
+
+/**
+ * Does this URL match one of the user's custom proxy patterns?
+ *
+ * File downloads are excluded whatever the patterns say. A pattern is a plain
+ * substring over the whole URL — that is what makes CM360 click ids matchable,
+ * and it is also what let "e4mevents" match
+ * storage.googleapis.com/e4mevents/Pitch-bfsi.pdf and send a 2.5 MB file
+ * through the proxy on every visit. Proxying a file buys nothing: attribution
+ * is decided by the tracker hop, not by who downloads the asset.
+ *
+ * @param {string} url
+ * @param {string[]} patterns
+ * @returns {boolean}
+ */
 function matchesCustomProxyPattern(url, patterns) {
     if (!patterns || patterns.length === 0) return false;
+    if (isFileDownloadUrl(url)) return false;
     const lower = url.toLowerCase();
     return patterns.some(p => lower.includes(p));
 }
@@ -300,8 +346,15 @@ async function resolveTrackerChain(startUrl, proxyConfig, patterns, logger = nul
         : null;
 
     for (let i = 0; i < maxHops; i++) {
+        // matchesCustomProxyPattern already refuses file URLs, so a chain that
+        // ends at a PDF stops here and the browser fetches it directly — the
+        // tracker hops that precede it still went through the proxy, which is
+        // what attribution actually depends on.
         const matchesPattern = matchesCustomProxyPattern(currentUrl, patterns);
         if (!matchesPattern) {
+            if (logger && isFileDownloadUrl(currentUrl)) {
+                logger.info(`Tracker chain ended at a file — not proxied: ${currentUrl.substring(0, 120)}`);
+            }
             return { finalUrl: currentUrl, hops };
         }
 
@@ -369,6 +422,8 @@ module.exports = {
     createPlaywrightProxy,
     parseCustomProxyPatterns,
     matchesCustomProxyPattern,
+    isFileDownloadUrl,
+    NEVER_PROXY_EXTENSIONS,
     resolveTrackerChain,
     GA_COLLECT_DOMAINS,
     GA_COLLECT_PATHS,

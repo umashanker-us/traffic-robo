@@ -71,7 +71,9 @@ describe('_watchForDownloadLanding', () => {
         const d = fakeDownload(PDF_URL, 'Pitch-bfsi.pdf');
         page.emit('download', d);
 
-        expect(v._downloadLanding).toEqual({ url: PDF_URL, filename: 'Pitch-bfsi.pdf' });
+        expect(v._downloadLanding).toEqual({
+            url: PDF_URL, filename: 'Pitch-bfsi.pdf', via: 'download',
+        });
         await Promise.resolve();
         expect(d.cancelled).toBe(true);
     });

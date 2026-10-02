@@ -139,6 +139,11 @@ class BrowserSession {
         this._profileLease = null;
         this._usePersistentContext = false;
         this._downloadLanding = null;
+        this._onFileLanding = null;
+        // Resolved once per campaign, before any browser is involved: when the
+        // landing URL is a file, interception hides it completely and goto just
+        // hangs, so the visit must not attempt the navigation at all.
+        this.landingProbe = config.landingProbe || null;
         this._extractedCookies = [];
 
         this.primaryDomain = this._extractDomain(this.targetUrl);
@@ -466,14 +471,121 @@ class BrowserSession {
      */
     _watchForDownloadLanding(page) {
         page.on('download', (download) => {
-            this._downloadLanding = {
+            this._recordFileLanding({
                 url: download.url(),
                 filename: download.suggestedFilename(),
-            };
+                via: 'download',
+            });
             // acceptDownloads:false already discards the body; cancelling makes
             // it explicit and releases the download slot immediately.
             Promise.resolve(download.cancel()).catch(() => {});
         });
+
+        // The download event alone is not a reliable signal. The two browsers
+        // disagree about the same PDF: the bundled Chromium starts a download
+        // (goto rejects with "Download is starting"), while real Chrome has a
+        // built-in PDF viewer and simply renders it — goto resolves, no
+        // download event fires, and the visit then waits out its whole
+        // navigation timeout on a document that can never run gtag.
+        //
+        // What both agree on is the navigation response's content type, so
+        // that is what decides.
+        page.on('response', (response) => {
+            try {
+                const request = response.request();
+                if (!request.isNavigationRequest()) return;
+                if (response.frame() !== page.mainFrame()) return;
+                const status = response.status();
+                if (status >= 300 && status < 400) return;        // a redirect hop
+
+                const contentType = (response.headers()['content-type'] || '').toLowerCase();
+                if (!contentType || BrowserSession.isRenderableContentType(contentType)) return;
+
+                const url = response.url();
+                this._recordFileLanding({
+                    url,
+                    filename: url.split('/').pop().split('?')[0],
+                    contentType: contentType.split(';')[0],
+                    via: 'content-type',
+                });
+            } catch {
+                // A closing page can throw here; a missed signal only costs the
+                // old behaviour, never correctness.
+            }
+        });
+    }
+
+    /**
+     * Content types a visit can actually browse. Anything else is a file, and a
+     * file cannot fire a GA4 hit however long we sit on it.
+     * @param {string} contentType
+     * @returns {boolean}
+     */
+    static isRenderableContentType(contentType) {
+        return contentType.startsWith('text/html')
+            || contentType.startsWith('application/xhtml')
+            || contentType.startsWith('text/plain')
+            || contentType.startsWith('image/svg');
+    }
+
+    /**
+     * Record the first file landing seen and release anything waiting on it.
+     */
+    _recordFileLanding(landing) {
+        if (this._downloadLanding) return;
+        this._downloadLanding = landing;
+        if (this._onFileLanding) {
+            const notify = this._onFileLanding;
+            this._onFileLanding = null;
+            notify(landing);
+        }
+    }
+
+    /**
+     * Navigate to the landing URL, giving up early when the response turns out
+     * to be a file rather than a page.
+     *
+     * Without the race, a file landing costs the full navigation timeout — 60s
+     * per visit on real Chrome, which rendered the PDF instead of refusing it.
+     *
+     * @returns {Promise<{fileLanding: Object|null, error: Error|null}>}
+     */
+    async _navigateToLanding(url, { waitUntil = 'load', timeout = 60000 } = {}) {
+        // Already known to be a file: skip the navigation entirely. With a route
+        // handler installed, a navigation that redirects to a download gives
+        // Playwright nothing to report — no route for the redirect target, no
+        // response, no download event — and page.goto hangs until it times out.
+        if (this.landingProbe && this.landingProbe.isFile) {
+            this._recordFileLanding({
+                url: this.landingProbe.finalUrl || url,
+                filename: String(this.landingProbe.finalUrl || url).split('/').pop().split('?')[0],
+                contentType: this.landingProbe.contentType,
+                via: 'probe',
+            });
+            return { fileLanding: this._downloadLanding, error: null };
+        }
+
+        const landingSignal = new Promise((resolve) => {
+            if (this._downloadLanding) { resolve(this._downloadLanding); return; }
+            this._onFileLanding = resolve;
+        });
+
+        let error = null;
+        const navigation = this.page.goto(url, { waitUntil, timeout })
+            .then(() => null)
+            .catch((e) => { error = e; return null; });
+
+        await Promise.race([navigation, landingSignal]);
+        this._onFileLanding = null;
+
+        if (this._downloadLanding) {
+            // Stop whatever the renderer is still doing with the file.
+            try { await this.page.evaluate(() => window.stop()); } catch {}
+            return { fileLanding: this._downloadLanding, error: null };
+        }
+
+        await navigation;
+        return { fileLanding: null, error };
     }
     /**
      * Chromium decides "this is a download" slightly after the navigation

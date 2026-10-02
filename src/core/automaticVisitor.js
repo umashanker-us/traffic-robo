@@ -316,10 +316,16 @@ class AutomaticVisitor extends BrowserSession {
                 }, urlToNavigate);
                 await this.page.waitForLoadState(waitStrategy, { timeout: navTimeout });
             } else {
-                await this.page.goto(urlToNavigate, {
+                const { fileLanding, error } = await this._navigateToLanding(urlToNavigate, {
                     waitUntil: waitStrategy,
-                    timeout: navTimeout
+                    timeout: navTimeout,
                 });
+                if (fileLanding) {
+                    this.logger.warn(`⬇ Landing URL is a file (${fileLanding.contentType || 'download'}): ${fileLanding.filename || fileLanding.url}`);
+                    this.replay._addEvent('download_landing', fileLanding);
+                    return;
+                }
+                if (error) throw error;
             }
 
             // Resolve true primary domain from the landed URL — if campaignUrl
@@ -785,31 +791,28 @@ class AutomaticVisitor extends BrowserSession {
      * safe to undershoot here.
      */
     async _simulateUserBehavior(budgetMs = 6000) {
-        const startedAt = Date.now();
+        // A tight budget used to skip straight to one bare scrollBy and return
+        // without recording it, so on a real site — where page load eats the
+        // budget — the report showed 0 scrolls and 0 mouse moves on almost
+        // every visit, and GA4 saw a session with no engagement at all.
+        //
+        // The actions themselves cost no time; only the pauses between them do.
+        // So every visit now performs the full sequence and only the pauses are
+        // rationed against the deadline.
+        const deadline = Date.now() + Math.max(budgetMs, 0);
+        const pause = async (ms) => {
+            const remaining = deadline - Date.now();
+            if (remaining <= 50) return;
+            await this._sleep(Math.min(ms, remaining));
+        };
+        const scale = Math.min(1.0, Math.max(budgetMs, 0) / 5000);
+
         try {
-            if (budgetMs < 1500) {
-                try {
-                    await this.page.evaluate(() => {
-                        window.scrollBy({ top: 400, behavior: 'auto' });
-                    });
-                } catch (e) { /* ignore */ }
-                return;
-            }
-
-            const TARGET_FULL_BUDGET = 5000;
-            const scale = Math.min(1.0, budgetMs / TARGET_FULL_BUDGET);
-
-            const sleepIfBudget = async (ms) => {
-                if (Date.now() - startedAt + ms > budgetMs) return;
-                await this._sleep(ms);
-            };
-
-            await sleepIfBudget(Math.floor((1000 + Math.random() * 1000) * scale));
-            await this._simulateMouseMovement();
-            await sleepIfBudget(Math.floor((500 + Math.random() * 1000) * scale));
-            await this._simulateScrolling(scale);
-            await sleepIfBudget(Math.floor((500 + Math.random() * 500) * scale));
-
+            await pause(Math.floor((1000 + Math.random() * 1000) * scale));
+            await this._simulateMouseMovement(pause);
+            await pause(Math.floor((500 + Math.random() * 1000) * scale));
+            await this._simulateScrolling(scale, pause);
+            await pause(Math.floor((500 + Math.random() * 500) * scale));
         } catch (error) {
             this.logger.debug(`User behavior simulation error: ${error.message}`);
         }
@@ -821,7 +824,8 @@ class AutomaticVisitor extends BrowserSession {
      * Scrolls themselves still fire (GA4 needs the events); only inter-scroll
      * pauses scale. The third scroll is skipped when budget is very tight.
      */
-    async _simulateScrolling(scale = 1.0) {
+    async _simulateScrolling(scale = 1.0, pause = null) {
+        const wait = pause || ((ms) => this._sleep(ms));
         try {
             const scrollBy = async (amount) => {
                 await this.page.evaluate((px) => {
@@ -833,17 +837,17 @@ class AutomaticVisitor extends BrowserSession {
             };
 
             await scrollBy(300 + Math.floor(Math.random() * 400));
-            await this._sleep(Math.floor((800 + Math.random() * 600) * scale));
+            await wait(Math.floor((800 + Math.random() * 600) * scale));
 
             await scrollBy(500 + Math.floor(Math.random() * 700));
-            await this._sleep(Math.floor((600 + Math.random() * 500) * scale));
+            await wait(Math.floor((600 + Math.random() * 500) * scale));
 
             if (scale > 0.5 && Math.random() > 0.3) {
                 const scroll3 = Math.random() > 0.5
                     ? (400 + Math.floor(Math.random() * 600))
                     : -(200 + Math.floor(Math.random() * 300));
                 await scrollBy(scroll3);
-                await this._sleep(Math.floor((400 + Math.random() * 400) * scale));
+                await wait(Math.floor((400 + Math.random() * 400) * scale));
             }
 
         } catch (error) {
@@ -854,14 +858,15 @@ class AutomaticVisitor extends BrowserSession {
     /**
      * Simulate mouse movement - More human-like
      */
-    async _simulateMouseMovement() {
+    async _simulateMouseMovement(pause = null) {
+        const wait = pause || ((ms) => this._sleep(ms));
         try {
             // Start position
             const startX = 100 + Math.floor(Math.random() * 200);
             const startY = 100 + Math.floor(Math.random() * 150);
             await this.page.mouse.move(startX, startY);
             if (this.replay) this.replay.logBehavior('mouse_move', { x: startX, y: startY });
-            await this._sleep(200 + Math.random() * 200);
+            await wait(200 + Math.random() * 200);
             
             // Move around (2-3 movements)
             const moves = 2 + Math.floor(Math.random() * 2);
@@ -870,7 +875,7 @@ class AutomaticVisitor extends BrowserSession {
                 const y = 100 + Math.floor(Math.random() * 400);
                 await this.page.mouse.move(x, y, { steps: 5 + Math.floor(Math.random() * 5) });
                 if (this.replay) this.replay.logBehavior('mouse_move', { x, y });
-                await this._sleep(150 + Math.random() * 200);
+                await wait(150 + Math.random() * 200);
             }
             
         } catch (error) {

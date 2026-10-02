@@ -9,6 +9,12 @@
  * `plugins: [1,2,3,4,5]` fake does not fix mimeTypes or the PDF viewer. When
  * Google Chrome is installed we drive it instead and get the genuine values.
  *
+ * Extensions: release-channel Chrome silently ignores --load-extension —
+ * chrome://extensions lists nothing and no service worker starts — while the
+ * bundled Chromium still honours it. An extension campaign therefore has to run
+ * on Chromium, and the plugin stand-in in the stealth script covers the
+ * fingerprint gap that choice leaves.
+ *
  * Version honesty: generated user agents claimed Chrome 140-143 while the
  * engine was Chromium 145 — and would claim 143 while running Chrome 154.
  * Feature detection does not lie: a page can see APIs the claimed version never
@@ -69,14 +75,24 @@ function parseVersion(raw) {
  *
  * @param {Object} [options]
  * @param {boolean} [options.preferInstalledChrome=true]
+ * @param {boolean} [options.needsExtension=false] - the campaign loads an
+ *   unpacked extension, which rules out release-channel Chrome entirely.
  * @param {string|null} [options.bundledPath] - packaged Chromium, when present
  * @returns {Promise<{channel: string|null, executablePath: string|null, version: string|null, kind: string}>}
  */
-async function resolveBrowser({ preferInstalledChrome = true, bundledPath = null } = {}) {
+async function resolveBrowser({ preferInstalledChrome = true, needsExtension = false, bundledPath = null } = {}) {
     if (resolved) return resolved;
 
     const attempts = [];
-    if (preferInstalledChrome && findInstalledChrome()) {
+    if (needsExtension) {
+        // Measured: release Chrome 154 silently ignores --load-extension —
+        // chrome://extensions lists nothing, no service worker starts, and the
+        // content script never runs, so the extension contributes nothing and
+        // reports as "not detected". The bundled Chromium still honours it.
+        // Chromium's weaker fingerprint is covered by the stealth script's
+        // plugin stand-in, so this trade is worth making.
+        logger.info('Extension enabled — using Chromium: release Chrome ignores --load-extension');
+    } else if (preferInstalledChrome && findInstalledChrome()) {
         attempts.push({ kind: 'chrome', launch: { channel: 'chrome' }, label: 'installed Google Chrome' });
     }
     if (bundledPath) {

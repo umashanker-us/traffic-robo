@@ -164,21 +164,19 @@ class ManualVisitor extends BrowserSession {
                 });
             }
         } else {
-            try {
-                await this.page.goto(urlToNavigate, {
-                    waitUntil: 'domcontentloaded',
-                    timeout: 60000
-                });
-            } catch (error) {
-                // Landing URL answered with a file instead of a page (PDF click
-                // trackers, asset links). Tracker hops already registered through
-                // the proxy, so the navigation error is expected, not a failure.
-                const landing = await this._awaitDownloadSignal();
-                if (!landing) throw error;
-                this.logger.warn(`⬇ Landing URL is a download: ${landing.filename || landing.url}`);
-                if (this.replay) this.replay._addEvent('download_landing', landing);
+            const { fileLanding, error } = await this._navigateToLanding(urlToNavigate, {
+                waitUntil: 'domcontentloaded',
+                timeout: 60000,
+            });
+            if (fileLanding) {
+                // The landing URL answered with a file, not a page. Tracker hops
+                // already registered through the proxy, so this is an outcome,
+                // not a failure.
+                this.logger.warn(`⬇ Landing URL is a file (${fileLanding.contentType || 'download'}): ${fileLanding.filename || fileLanding.url}`);
+                if (this.replay) this.replay._addEvent('download_landing', fileLanding);
                 return;
             }
+            if (error) throw error;
         }
 
         // Resolve true primary domain from the landed URL — if the URL was a

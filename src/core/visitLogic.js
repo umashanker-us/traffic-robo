@@ -14,6 +14,7 @@ const { generateVisitsArray, calculateMetrics, shuffleArray } = require('../help
 const { getUserAgentList, getMatchingScreenSize, getMixedScreenSizes,
         setRuntimeChromeVersion, isInconsistentDeviceType } = require('../helpers/userAgents');
 const { resolveBrowser } = require('../helpers/browserResolver');
+const { probeLanding } = require('../helpers/landingProbe');
 const AutomaticVisitor = require('./automaticVisitor');
 const ManualVisitor = require('./manualVisitor');
 const { SessionReplayStore } = require('../helpers/sessionReplay');
@@ -153,6 +154,9 @@ class VisitLogic {
         // version BEFORE generating user agents, so every UA claims the engine
         // that is actually behind it instead of a hardcoded guess.
         const browserInfo = await resolveBrowser({
+            // An unpacked extension only loads in Chromium, so the choice of
+            // binary follows the extension, not the other way round.
+            needsExtension: !!(extensionEnabled && extensionPath),
             bundledPath: this._bundledChromiumPath || null,
         });
         setRuntimeChromeVersion(browserInfo.version);
@@ -162,6 +166,20 @@ class VisitLogic {
         }
 
         const userAgentList = getUserAgentList(userAgentType, 100);
+
+        // Resolve what each campaign URL lands on, once, before any visit runs.
+        // A URL that ends on a file cannot produce a GA4 session, and attempting
+        // the navigation costs a full timeout per visit for nothing.
+        this.landingProbes = new Map();
+        for (const url of urlList) {
+            const probe = await probeLanding(url, { userAgent: userAgentList[0] });
+            this.landingProbes.set(url, probe);
+            if (probe.isFile) {
+                logger.warn(`${url} lands on a file (${probe.contentType}) after ${probe.hops} redirect(s) — no GA4 session is possible. Tracker hops still fire; use an HTML landing page for GA4 traffic.`);
+            } else if (probe.error) {
+                logger.debug(`Landing probe inconclusive for ${url}: ${probe.error}`);
+            }
+        }
         // In CSV mode each URL gets its own 100-visit distribution from its own
         // (bounce, duration, pages); in normal mode there is one shared distribution.
         const visitsList = generateVisitsArray(avgSessionDuration, bounceRate, pagePerSession);
@@ -617,6 +635,9 @@ class VisitLogic {
 
         const visitor = new AutomaticVisitor({
             campaignUrl: resolvedCampaignUrl,
+            // Decided once per campaign in start(); keyed by the configured
+            // URL, not the resolved one, since that is what was probed.
+            landingProbe: (this.landingProbes && this.landingProbes.get(campaignUrl)) || null,
             referer: resolvedReferer,
             isReferer: resolvedIsReferer,
             visitReferer: resolvedVisitReferer,
@@ -915,6 +936,7 @@ class VisitLogic {
 
         const visitor = new ManualVisitor({
             url: resolvedUrl,
+            landingProbe: (this.landingProbes && this.landingProbes.get(url)) || null,
             referer: resolvedReferer,
             isReferer: resolvedIsReferer,
             visitReferer: resolvedVisitReferer,
