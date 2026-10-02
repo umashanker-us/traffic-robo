@@ -32,6 +32,7 @@ const {
 } = require('../helpers/clientHints');
 const { patchCollectUrlForReturning } = require('../helpers/collectPatch');
 const { acquireProfile } = require('../helpers/profilePool');
+const { grantExtensionConsent, hasConsent } = require('../helpers/extensionConsent');
 const { getResolvedBrowser } = require('../helpers/browserResolver');
 
 // ===== Debug All Tracking Pixels Toggle =====
@@ -113,6 +114,10 @@ class BrowserSession {
         this.extensionPath = config.extensionPath || '';
         this.extensionLoaded = false;
         this.extensionVerified = null;        // null = never checked
+        // 'granted' | 'already-granted' | 'failed' | null — the extension reports
+        // nothing without it, so the report needs to show it.
+        this.extensionConsent = null;
+        this._grantingConsent = false;
         this.extensionProfilePool = config.extensionProfilePool || 0;
         this.extensionProfileId = null;
 
@@ -255,6 +260,7 @@ class BrowserSession {
             extensionEnabled: this.extensionEnabled,
             extensionLoaded: this.extensionLoaded,
             extensionProfileId: this.extensionProfileId,
+            extensionConsent: this.extensionConsent,
             ...extra,
         };
     }
@@ -467,18 +473,28 @@ class BrowserSession {
                 await this._resetGACookies();
             }
 
-            // Auto-close extension pages (welcome/onboarding tabs) as they appear
+            // Auto-close the extension's own tabs (welcome/onboarding) as they
+            // appear — except while consent is being granted, which happens on
+            // the extension's options page. Closing that was part of why the
+            // extension never reported anything.
             const isExtPage = (url) =>
                 url.startsWith('chrome-extension://') ||
                 url.includes('similarweb.com/corp/extension-welcome');
             this.context.on('page', async (page) => {
                 try {
                     await page.waitForLoadState('commit').catch(() => {});
+                    if (this._grantingConsent) return;
                     if (isExtPage(page.url())) {
                         await page.close().catch(() => {});
                     }
                 } catch {}
             });
+
+            // The extension reports nothing until consent is granted, and the
+            // setting lives in the profile — so this runs once per pooled
+            // profile and is skipped thereafter. Measured on v6.12.24: without
+            // it, browsing produces zero SimilarWeb traffic.
+            await this._grantExtensionConsent();
         } else {
             this.context = await this.browser.newContext(contextOptions);
         }
@@ -1298,6 +1314,41 @@ class BrowserSession {
     }
 
     /**
+     * Grant the extension the consent it needs, once per profile.
+     *
+     * Its options page carries the control ("I agree to allow access to
+     * information about the sites I visit"), it defaults to off, and with it off
+     * the extension reports nothing at all. The setting persists in the profile,
+     * which is why this pairs with the profile pool: on a throwaway profile
+     * consent could never survive to the next visit.
+     */
+    async _grantExtensionConsent() {
+        if (!this.extensionEnabled || !this.context) return;
+
+        const profileDir = this._tempUserDataDir;
+        if (hasConsent(profileDir)) {
+            this.extensionConsent = 'already-granted';
+            return;
+        }
+
+        this._grantingConsent = true;
+        try {
+            const result = await grantExtensionConsent(this.context, {
+                profileDir,
+                logger: this.logger,
+            });
+            this.extensionConsent = result.granted
+                ? (result.alreadyGranted ? 'already-granted' : 'granted')
+                : 'failed';
+            if (!result.granted) {
+                this.logger.warn(`Extension consent not granted (${result.reason}) — the extension will load but report nothing`);
+            }
+        } finally {
+            this._grantingConsent = false;
+        }
+    }
+
+    /**
      * Check whether the extension's content script actually reached the page,
      * and record the answer on the replay so it survives into the report.
      *
@@ -1314,19 +1365,25 @@ class BrowserSession {
                 hasPixel: !!document.querySelector('img[src*="similarweb.com"]'),
             }));
 
-            const detected = status.dataAttribute || status.hasPixel;
+            // v5 announced itself in the DOM (a data attribute and a pixel);
+            // v6 does neither, so those markers alone would report a perfectly
+            // working extension as missing. Consent plus a running service
+            // worker is what actually says it can report.
+            const consented = this.extensionConsent === 'granted' || this.extensionConsent === 'already-granted';
+            const detected = status.dataAttribute || status.hasPixel || consented;
             this.extensionVerified = detected;
 
             if (this.replay) {
                 this.replay.logExtension(detected, {
                     profileId: this.extensionProfileId,
+                    consent: this.extensionConsent,
                     dataAttribute: status.dataAttribute,
                     pixel: status.hasPixel,
                 });
             }
 
             if (detected) {
-                this.logger.info(`🧩 ✅ Extension WORKING (attr=${status.dataAttribute}, pixel=${status.hasPixel})`);
+                this.logger.info(`🧩 ✅ Extension WORKING (consent=${this.extensionConsent}, attr=${status.dataAttribute}, pixel=${status.hasPixel})`);
             } else {
                 this.logger.warn(`🧩 ⚠️ Extension NOT DETECTED on page — failed to load, blocked by page CSP, or wrong path`);
             }

@@ -9,7 +9,7 @@ const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const { pipeline } = require('stream/promises');
-const { execFileSync } = require('child_process');
+const zlib = require('zlib');
 
 const SIMILARWEB_EXTENSION_ID = 'hoklmmgfnpapgjgcpechhaamimifchmp';
 
@@ -66,34 +66,85 @@ function findZipOffset(buffer) {
 }
 
 /**
- * Extract a CRX file to a directory.
- * Strips CRX header → writes temp ZIP → extracts via PowerShell (always
- * available on Windows, no dependency on extract-zip inside asar).
+ * Read a ZIP's central directory and return its entries.
+ *
+ * Only what a Web Store CRX contains: stored and deflated entries, no
+ * encryption, no zip64. Anything else throws rather than writing a corrupt file.
+ */
+function readZipEntries(buf) {
+    // End of central directory, signature 0x06054b50. Scanned from the back
+    // because the trailing comment field has no fixed length.
+    let eocd = -1;
+    for (let i = buf.length - 22; i >= 0 && i >= buf.length - 22 - 65535; i--) {
+        if (buf.readUInt32LE(i) === 0x06054b50) { eocd = i; break; }
+    }
+    if (eocd < 0) throw new Error('ZIP end-of-central-directory not found');
+
+    const count = buf.readUInt16LE(eocd + 10);
+    let offset = buf.readUInt32LE(eocd + 16);
+    if (offset === 0xffffffff) throw new Error('zip64 archives are not supported');
+
+    const entries = [];
+    for (let i = 0; i < count; i++) {
+        if (buf.readUInt32LE(offset) !== 0x02014b50) throw new Error('bad central directory entry');
+        entries.push({
+            method: buf.readUInt16LE(offset + 10),
+            compressedSize: buf.readUInt32LE(offset + 20),
+            localOffset: buf.readUInt32LE(offset + 42),
+            name: buf.toString('utf8', offset + 46, offset + 46 + buf.readUInt16LE(offset + 28)),
+        });
+        offset += 46 + buf.readUInt16LE(offset + 28)
+                     + buf.readUInt16LE(offset + 30)
+                     + buf.readUInt16LE(offset + 32);
+    }
+    return entries;
+}
+
+/**
+ * Extract one entry, taking the data offset from its local header so a trailing
+ * data descriptor cannot mislead us.
+ */
+function readZipEntry(buf, entry) {
+    const h = entry.localOffset;
+    if (buf.readUInt32LE(h) !== 0x04034b50) throw new Error(`bad local header for ${entry.name}`);
+    const start = h + 30 + buf.readUInt16LE(h + 26) + buf.readUInt16LE(h + 28);
+    const data = buf.slice(start, start + entry.compressedSize);
+
+    if (entry.method === 0) return data;                      // stored
+    if (entry.method === 8) return zlib.inflateRawSync(data);  // deflate
+    throw new Error(`unsupported compression method ${entry.method} for ${entry.name}`);
+}
+
+/**
+ * Extract a CRX to a directory, in Node rather than by shelling out.
+ *
+ * The previous version called PowerShell's Expand-Archive and passed the paths
+ * as `$args[0]`/`$args[1]`, which `powershell -Command` never populates — only
+ * `-File` does — so extraction failed outright with "argument is null or empty"
+ * and the in-app Download button did nothing. Interpolating the paths into the
+ * command string instead is what that change was avoiding, because a profile
+ * like C:\Users\O'Brien breaks the quoting. Inflating here removes both
+ * problems, and the shell dependency with them.
  */
 async function extractCrx(crxPath, destDir) {
     const crxBuffer = fs.readFileSync(crxPath);
-    const zipOffset = findZipOffset(crxBuffer);
-    const zipBuffer = crxBuffer.slice(zipOffset);
-
-    const tmpZip = crxPath + '.zip';
-    fs.writeFileSync(tmpZip, zipBuffer);
+    const zipBuffer = crxBuffer.slice(findZipOffset(crxBuffer));
 
     fs.mkdirSync(destDir, { recursive: true });
+    const root = path.resolve(destDir);
 
-    // PowerShell Expand-Archive — works on all Windows 10/11 without extra deps.
-    // Paths go in as argv entries, not interpolated into the command string: a
-    // user profile like C:\Users\O'Brien would otherwise break the quoting.
-    try {
-        execFileSync('powershell', [
-            '-NoProfile',
-            '-NonInteractive',
-            '-Command',
-            'Expand-Archive -LiteralPath $args[0] -DestinationPath $args[1] -Force',
-            tmpZip,
-            destDir,
-        ], { timeout: 60000, windowsHide: true });
-    } finally {
-        try { fs.unlinkSync(tmpZip); } catch {}
+    for (const entry of readZipEntries(zipBuffer)) {
+        const relative = entry.name.replace(/\\/g, '/');
+        if (relative.endsWith('/')) continue;                 // directory marker
+
+        // Refuse anything that would land outside the extension directory.
+        const target = path.resolve(root, relative);
+        if (target !== root && !target.startsWith(root + path.sep)) {
+            throw new Error(`refusing to write outside the extension directory: ${entry.name}`);
+        }
+
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        fs.writeFileSync(target, readZipEntry(zipBuffer, entry));
     }
 }
 

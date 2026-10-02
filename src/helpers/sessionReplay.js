@@ -275,6 +275,9 @@ class SessionReplay {
             extensionLoaded: info.extensionLoaded || false,
             extensionVerified: null,
             extensionProfileId: info.extensionProfileId || null,
+            // The extension reports nothing without consent, so a report
+            // that omits it cannot explain an empty panel.
+            extensionConsent: info.extensionConsent || null,
         };
     }
 

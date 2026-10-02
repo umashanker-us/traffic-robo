@@ -91,6 +91,9 @@ function getVisitStatus(replay) {
 function getExtensionStatus(sessionInfo, stats) {
     if (!sessionInfo.extensionEnabled) return 'Off';
     if (!sessionInfo.extensionLoaded) return 'Not loaded';
+    // Measured on SimilarWeb v6.12.24: without consent the extension loads and
+    // injects nothing and sends nothing, so "loaded" alone is misleading.
+    if (sessionInfo.extensionConsent === 'failed') return 'No consent';
     const verified = sessionInfo.extensionVerified !== undefined
         ? sessionInfo.extensionVerified
         : stats.extensionDetected;
